@@ -1,0 +1,36 @@
+# fly.toml app configuration file generated for flask-api-status
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = "flask-api-status" # Replace with your actual app name on Fly.io
+primary_region = "gru"   # Example: Sao Paulo, Brazil. Choose the region closest to your users.
+
+[build]
+  # Specifies that Fly.io should build the image using the Dockerfile in the project root
+  dockerfile = "Dockerfile"
+
+[env]
+  # Fly.io automatically sets the PORT environment variable. 
+  # DATABASE_URL should be automatically injected if you attach a Fly Postgres/MySQL database.
+  # You might need to set it manually via `fly secrets set DATABASE_URL=...` if using an external DB
+  # or if the automatic injection doesn't work as expected.
+  # Example: DATABASE_URL = "mysql+pymysql://user:pass@host:port/db"
+  pass
+
+[[http_service]]
+  internal_port = 8080 # The port your Flask app listens on inside the container
+  force_https = true
+  auto_stop_machines = true # Automatically stop machines when idle
+  auto_start_machines = true # Automatically start machines on request
+  min_machines_running = 0 # Set to 1 or more for higher availability
+  processes = ["app"] # Matches the default process group
+
+  [[http_service.checks]]
+    interval = "10s"
+    timeout = "2s"
+    grace_period = "5s"
+    method = "get"
+    path = "/" # Basic health check using the root route
+    protocol = "http"
+

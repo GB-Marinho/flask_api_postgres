@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.git
+.gitignore
+.dockerignore
+*.sqlite3
+local_dev.db
+instance/
+
