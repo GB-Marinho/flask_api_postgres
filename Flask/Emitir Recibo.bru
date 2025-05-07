@@ -1,0 +1,27 @@
+meta {
+  name: Emitir Recibo
+  type: http
+  seq: 2
+}
+
+post {
+  url: http://localhost:8080/api/emitir-recibo
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "req": {
+      "acao": "emitir",
+      "id": 1,
+      "cliente": "123",
+      "pagador": "99999999999",
+      "beneficiario": "99999999999",
+      "valor": "9999,99",
+      "data": "13/01/2025",
+      "descricao": "CONSULTA MEDICA"
+    }
+  }
+  
+}

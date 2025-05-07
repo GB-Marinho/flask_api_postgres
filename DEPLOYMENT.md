@@ -51,9 +51,7 @@ Esta é a abordagem recomendada, pois o Fly Postgres é estável, bem integrado 
     *   A página inicial deve mostrar "Flask API Status is running!".
     *   Envie uma requisição POST para o endpoint `/api/status` usando `curl` ou outra ferramenta, incluindo o `user_id`:
       ```bash
-      curl -X POST -H "Content-Type: application/json" \
-           -d '{"user_id": "fly_user_789", "message": "Test on Fly.io with Postgres"}' \
-           https://<flask-app-name>.fly.dev/api/status 
+      curl -X POST -H "Content-Type: application/json" -d '{"user_id": "fly_user_789", "message": "Test on Fly.io with Postgres"}' https://flask-api-postgres.fly.dev/api/status 
       ```
     *   Verifique se a resposta JSON indica sucesso (`status: received_and_logged`) e inclui o `log_id` e o `user_id`.
     *   Monitore os logs da aplicação para verificar se a conexão com o banco ocorreu e se há erros:

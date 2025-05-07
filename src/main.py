@@ -16,6 +16,7 @@ def create_app():
     database_url = os.getenv("DATABASE_URL")
     if database_url:
         # Handle Fly.io Postgres URL (replace postgres:// with postgresql:// for SQLAlchemy)
+        print("Encontrado DATABASE_URL")  # Debugging line
         if database_url.startswith("postgres://"):
             database_url = database_url.replace("postgres://", "postgresql://", 1)
         # Keep the MySQL check for flexibility with external MySQL
