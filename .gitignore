@@ -68,3 +68,7 @@ docker-data/
 *.bak
 *.tmp
 *.swp
+
+# === Bruno ===
+Flask/
+*.bru

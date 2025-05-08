@@ -44,10 +44,10 @@ def create_app():
 
     # --- Import and Register Blueprints --- 
     from src.routes.status_routes import status_bp
-    app.register_blueprint(status_bp, url_prefix="/api")
+    app.register_blueprint(status_bp, url_prefix="/")
     
     from routes.auth_routes import auth_bp
-    app.register_blueprint(auth_bp, url_prefix="/api")
+    app.register_blueprint(auth_bp, url_prefix="/auth")
 
     # --- Import Models (ensure they are known to SQLAlchemy before create_all) ---
     # This import is necessary so that Flask-Migrate or create_all knows about the models.

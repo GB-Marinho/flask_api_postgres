@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 from src.extensions import db # Import db from extensions
+from src.modules.models import RequestLog # Import the model
 from src.modules.models import Recibo
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError

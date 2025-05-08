@@ -28,8 +28,8 @@ class RequestLog(db.Model):
                 return None # Or handle error appropriately
         return None
 """
-"""
-# Recebe requisições JSON e registra no banco de dados. - ANTIGO
+
+# Recebe requisições JSON e registra no banco de dados.
 class RequestLog(db.Model):
     __tablename__ = 'request_logs'
 
@@ -42,7 +42,6 @@ class RequestLog(db.Model):
 
     def set_data(self, data_dict):
         self.request_data = json.dumps(data_dict, ensure_ascii=False)
-"""
 
 # Registra recibos no banco de dados
 class Recibo(db.Model):

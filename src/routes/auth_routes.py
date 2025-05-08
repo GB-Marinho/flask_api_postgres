@@ -8,7 +8,7 @@ MASTER_KEY = os.getenv("MASTER_KEY")
 
 auth_bp = Blueprint("auth_bp", __name__)
 
-@auth_bp.route("/auth/token", methods=["POST"])
+@auth_bp.route("/token", methods=["POST"])
 def emitir_token():
     data = request.get_json()
     chave_recebida = data.get("master_key")
