@@ -1,21 +1,20 @@
 from flask import Blueprint, request, jsonify
 from src.extensions import db # Import db from extensions
-from src.modules.models import RequestLog # Import the model
 from src.modules.models import Recibo
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from src.modules.models import Emitente
+from auth.jwt_auth import token_required
 
 # Define the blueprint
 status_bp = Blueprint(
     'status_bp', __name__
 )
 
+"""
 @status_bp.route('/status', methods=['POST'])
 def handle_status_request():
-    """Receives a JSON request including a user_id, logs it to the DB, 
-       and returns a status.
-    """
+    
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
 
@@ -55,13 +54,18 @@ def handle_status_request():
         db.session.rollback() # Rollback in case of error
         print(f"Error logging request for user {user_id}: {e}")
         return jsonify({"error": "Failed to process request", "details": str(e)}), 500
+"""
 
 @status_bp.route('/emitir-recibo', methods=['POST'])
+@token_required
 def emitir_recibo():
     """
     Endpoint para receber requisições com ações: emitir, cancelar ou consultar recibos.
     A ação é definida pelo campo "acao" presente dentro de "req".
     """
+    
+    cliente_id = request.cliente_id  # extraído do token
+    print(f"Token válido para o cliente {cliente_id}")
 
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400

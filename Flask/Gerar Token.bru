@@ -1,0 +1,17 @@
+meta {
+  name: Gerar Token
+  type: http
+  seq: 5
+}
+
+post {
+  url: http://localhost:8080/api/auth/token
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "master_key": "0ITR4RVcMh1ZODjX6I0LesPE5DXibjlYSLJ7nq3BcC5vIPSjNJYq_0bhv8eZZUn6epBukQnR1Z98nllBWE5SsQ"
+  }
+}

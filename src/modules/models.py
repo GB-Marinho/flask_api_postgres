@@ -28,7 +28,7 @@ class RequestLog(db.Model):
                 return None # Or handle error appropriately
         return None
 """
-
+"""
 # Recebe requisições JSON e registra no banco de dados. - ANTIGO
 class RequestLog(db.Model):
     __tablename__ = 'request_logs'
@@ -42,6 +42,7 @@ class RequestLog(db.Model):
 
     def set_data(self, data_dict):
         self.request_data = json.dumps(data_dict, ensure_ascii=False)
+"""
 
 # Registra recibos no banco de dados
 class Recibo(db.Model):
@@ -110,3 +111,18 @@ class Emitente(db.Model):
     cpf = db.Column(db.String(11), nullable=False)
     certificado = db.Column(db.String(255), nullable=False)
     senha = db.Column(db.String(255), nullable=False)
+    
+class AuthLog(db.Model):
+    __tablename__ = "auth_logs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    ip = db.Column(db.String(45), nullable=False)  # IPv6 compatível
+    status = db.Column(db.String(10), nullable=False)  # "success" ou "fail"
+    chave_parcial = db.Column(db.String(20), nullable=True)  # para depuração
+    
+class TokenAtual(db.Model):
+    __tablename__ = "token_atuais"
+    
+    cliente = db.Column(db.String(50), primary_key=True)
+    jti = db.Column(db.String(32), nullable=False)

@@ -8,6 +8,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 # Import extensions (like db) after path modification
 from src.extensions import db
 
+# Importa o dotenv para carregar variáveis de ambiente
+from dotenv import load_dotenv
+load_dotenv()
+
 def create_app():
     """Application Factory Pattern"""
     app = Flask(__name__)
@@ -41,6 +45,9 @@ def create_app():
     # --- Import and Register Blueprints --- 
     from src.routes.status_routes import status_bp
     app.register_blueprint(status_bp, url_prefix="/api")
+    
+    from routes.auth_routes import auth_bp
+    app.register_blueprint(auth_bp, url_prefix="/api")
 
     # --- Import Models (ensure they are known to SQLAlchemy before create_all) ---
     # This import is necessary so that Flask-Migrate or create_all knows about the models.
