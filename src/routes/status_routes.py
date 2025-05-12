@@ -5,7 +5,7 @@ from src.modules.models import Recibo
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from src.modules.models import Emitente
-from auth.jwt_auth import token_required
+from src.auth.jwt_auth import token_required
 
 # Define the blueprint
 status_bp = Blueprint(

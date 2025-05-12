@@ -30,5 +30,5 @@ EXPOSE 8080
 # Define the command to run the application
 # Use gunicorn for production environments eventually, but start with Flask dev server
 # For production with Fly.io, you might switch to:
-CMD ["gunicorn", "--bind", ":8080", "--workers", "4", "src.main:app"]
+CMD ["gunicorn", "--bind", ":8080", "--workers", "4", "wsgi:app"]
 # CMD ["python", "src/main.py"]

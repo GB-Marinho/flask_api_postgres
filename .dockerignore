@@ -10,3 +10,4 @@ __pycache__/
 local_dev.db
 instance/
 
+Flask/
