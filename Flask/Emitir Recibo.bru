@@ -11,20 +11,20 @@ post {
 }
 
 auth:bearer {
-  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjbGllbnRlX3VuaWNvIiwianRpIjoiMThhOWFmOTM0NTI4OTAzYjEzZDM2ZWI2ZDJhMzg2MjYiLCJpYXQiOjE3NDcwNTIyNzR9.hP84o7OrhwYdCK3mTV08RoUc4AyrOqBe0NGARBFtCCM
+  token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjbGllbnRlX3VuaWNvIiwianRpIjoiOGUyNzdjZWJmZmM2NThjNmZmMWEwODc2ZTljZDA0N2EiLCJpYXQiOjE3NDcxNTk0Njh9.G5fCZsuA8iuNO9wYYYMWgwaUvr8_W_QsrPgm5DXx8Zs
 }
 
 body:json {
   {
     "req": {
-      "acao": "emitir",
-      "id": 1,
-      "cliente": "123",
-      "pagador": "99999999999",
-      "beneficiario": "99999999999",
-      "valor": "9999,99",
-      "data": "13/01/2025",
-      "descricao": "CONSULTA MEDICA"
+      "action": "issue",
+      "receipt_id": 1,
+      "client_code": "123",
+      "payer": "16394788686",
+      "beneficiary": "00254694799",
+      "amount": "9999,99",
+      "date": "13/01/2025",
+      "description": "Consulta médica"
     }
   }
   

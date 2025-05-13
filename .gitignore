@@ -72,3 +72,6 @@ docker-data/
 # === Bruno ===
 Flask/
 *.bru
+
+# === Outros ===
+tests

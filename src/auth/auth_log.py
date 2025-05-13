@@ -1,5 +1,4 @@
 from src.extensions import db
-from datetime import datetime
 from flask import request
 from src.modules.models import AuthLog
 from src.extensions import db

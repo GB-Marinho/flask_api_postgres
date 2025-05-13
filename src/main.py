@@ -1,75 +1,84 @@
 import sys
 import os
-from flask import Flask
 
-# Ensure the src directory is in the Python path
+# Garante que o diretório src esteja no caminho do Python
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-# Import extensions (like db) after path modification
+from flask import Flask
+from dotenv import load_dotenv
+
+# Importa extensões (como db) após a modificação de caminho
 from src.extensions import db
 
-# Importa o dotenv para carregar variáveis de ambiente
-from dotenv import load_dotenv
+# Carrega variáveis de ambiente
 load_dotenv()
 
+
 def create_app():
-    """Application Factory Pattern"""
+    """Padrão de Fábrica de Aplicação"""
     app = Flask(__name__)
 
-    # --- Database Configuration --- 
+    # --- Configuração do Banco de Dados ---
     database_url = os.getenv("DATABASE_URL")
     if database_url:
-        # Handle Fly.io Postgres URL (replace postgres:// with postgresql:// for SQLAlchemy)
-        print("Encontrado DATABASE_URL")  # Debugging line
+        # Trata URL do Postgres do Fly.io (substitui postgres:// por postgresql:// para SQLAlchemy)
+        print("Encontrado DATABASE_URL")  # Linha de depuração
         if database_url.startswith("postgres://"):
             database_url = database_url.replace("postgres://", "postgresql://", 1)
-        # Keep the MySQL check for flexibility with external MySQL
+        # Mantém verificação do MySQL para flexibilidade com MySQL externo
         elif database_url.startswith("mysql://"):
-            # Ensure PyMySQL is used if it's a MySQL URL (might need adjustment based on driver)
+            # Garante uso de PyMySQL se for URL MySQL
             database_url = database_url.replace("mysql://", "mysql+pymysql://", 1)
-        
+
         app.config["SQLALCHEMY_DATABASE_URI"] = database_url
-        print(f"Using database: {app.config['SQLALCHEMY_DATABASE_URI'].split('@')[1] if '@' in app.config['SQLALCHEMY_DATABASE_URI'] else 'SQLite or Unknown'}") # Log DB type without credentials
+        print(
+            f"Usando banco de dados: "
+            f"{app.config['SQLALCHEMY_DATABASE_URI'].split('@')[1] if '@' in app.config['SQLALCHEMY_DATABASE_URI'] else 'SQLite ou Desconhecido'}"
+        )  # Exibe tipo do DB sem credenciais
     else:
-        # Fallback for local development (SQLite)
-        print("WARNING: DATABASE_URL environment variable not set. Using default local SQLite DB.")
+        # Alternativa para desenvolvimento local (SQLite)
+        print("AVISO: variável DATABASE_URL não definida. Usando SQLite local padrão.")
         instance_path = os.path.join(app.instance_path)
         os.makedirs(instance_path, exist_ok=True)
-        app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{os.path.join(instance_path, 'local_dev.db')}"
+        app.config["SQLALCHEMY_DATABASE_URI"] = (
+            f"sqlite:///{os.path.join(instance_path, 'local_dev.db')}"
+        )
 
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-    # --- Initialize Extensions --- 
+    # --- Inicializa Extensões ---
     db.init_app(app)
 
-    # --- Import and Register Blueprints --- 
-    from src.routes.status_routes import status_bp
-    app.register_blueprint(status_bp, url_prefix="/")
-    
+    # --- Importa e Registra Blueprints ---
+    from src.routes.api_routes import api_bp
+
+    app.register_blueprint(api_bp, url_prefix="/")
+
     from src.routes.auth_routes import auth_bp
+
     app.register_blueprint(auth_bp, url_prefix="/auth")
 
-    # --- Import Models (ensure they are known to SQLAlchemy before create_all) ---
-    # This import is necessary so that Flask-Migrate or create_all knows about the models.
+    # --- Importa Models (para que sejam reconhecidos pelo SQLAlchemy antes do create_all) ---
+    # Este import é necessário para que o Flask-Migrate ou create_all conheça os models.
     from src.modules import models
 
-    # --- Basic Route for Testing --- 
+    # --- Rota Básica para Teste ---
     @app.route("/")
     def hello_world():
         return "Flask API Status is running!"
 
-    # --- Create DB tables within app context --- 
-    # This will create tables based on models for the configured DB (SQLite, Postgres, MySQL)
+    # --- Criação de tabelas no contexto da aplicação ---
+    # Isso criará as tabelas com base nos models para o DB configurado (SQLite, Postgres, MySQL)
     with app.app_context():
-        print("Ensuring database tables exist...")
+        print("Garantindo existência das tabelas no banco...")
         db.create_all()
-        print("Database tables checked/created.")
+        print("Tabelas do banco verificadas/criadas.")
 
     return app
+
 
 if __name__ == "__main__":
     app = create_app()
     port = int(os.environ.get("PORT", 8080))
-    # Use debug=True for development, but ensure it's False or removed for production
-    app.run(host="0.0.0.0", port=port, debug=False) 
-
+    # Use debug=True para desenvolvimento, mas garanta que esteja False ou removido em produção
+    app.run(host="0.0.0.0", port=port, debug=False)
