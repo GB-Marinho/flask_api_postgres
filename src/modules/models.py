@@ -62,6 +62,7 @@ class Emitente(db.Model):
     certificate = db.Column(db.String(255), nullable=False)
     password = db.Column(db.String(255), nullable=False)
     active = db.Column(db.Boolean, default=True)
+    certificate_expires_at = db.Column(db.DateTime, nullable=True)
     
 # Log de todas as tentativas de autenticação
 # (tanto sucesso quanto falha) para auditoria e segurança

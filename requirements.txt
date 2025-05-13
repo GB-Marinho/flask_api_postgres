@@ -16,3 +16,4 @@ python-dotenv==1.1.0
 gunicorn
 cryptography
 pyOpenSSL
+boto3

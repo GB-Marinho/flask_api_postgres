@@ -7,6 +7,7 @@ from src.modules.models import EndpointUrl
 from src.auth.jwt_auth import token_required
 from cryptography.fernet import Fernet
 import os
+from cryptography.hazmat.primitives import hashes
 
 
 
@@ -158,22 +159,46 @@ def registrar_endpoint():
         "callback_id": novo_callback.id
     }), 201
     
+from flask import request, jsonify
+from cryptography.hazmat.primitives.serialization import pkcs12
+from cryptography.x509.oid import NameOID
+from datetime import datetime
+import re
+
 @api_bp.route('/emitentes', methods=['POST'])
 @token_required
 def register_emitente():
     """
     Ativa (cria ou atualiza) ou desativa um emitente com base no campo 'action'.
-    A senha é criptografada com Fernet.
+    A senha do certificado é criptografada com Fernet e validada.
     """
     client_code = request.client_code
 
-    if not request.is_json:
-        return jsonify({"error": "Request must be JSON"}), 400
+    # Suporte a multipart/form-data ou JSON puro
+    is_multipart = 'multipart/form-data' in request.content_type
 
-    data = request.get_json()
-    emitente_data = data.get("req")
-    if not emitente_data:
-        return jsonify({"error": "Missing 'req' field"}), 400
+    if is_multipart:
+        emitente_data = {
+            "action": request.form.get("action"),
+            "client_code": request.form.get("client_code"),
+            "cpf": request.form.get("cpf"),
+            "password": request.form.get("password"),
+        }
+        file = request.files.get("certificate")
+        if not file:
+            return jsonify({"error": "Arquivo de certificado (.pfx) não enviado."}), 400
+        pfx_bytes = file.read()
+    else:
+        if not request.is_json:
+            return jsonify({"error": "Request must be JSON"}), 400
+        data = request.get_json()
+        emitente_data = data.get("req")
+        if not emitente_data:
+            return jsonify({"error": "Missing 'req' field"}), 400
+        try:
+            pfx_bytes = bytes.fromhex(emitente_data["certificate"])
+        except Exception:
+            return jsonify({"error": "Campo 'certificate' deve estar em formato hexadecimal."}), 400
 
     action = emitente_data.get("action")
     if action not in {"enable", "disable"}:
@@ -186,16 +211,39 @@ def register_emitente():
     emitente = Emitente.query.filter_by(client_code=client_code_in_req).first()
 
     if action == "enable":
-        # Campos obrigatórios na criação
-        for field in ("cpf", "certificate", "password"):
+        for field in ("cpf", "password"):
             if not emitente and not emitente_data.get(field):
                 return jsonify({"error": f"Missing field: {field}"}), 400
 
-        # Atualização ou criação
-        encrypted_password = fernet.encrypt(emitente_data["password"].encode()).decode() if emitente_data.get("password") else None
+        # Valida o certificado e obtém vencimento
+        try:
+            senha_cert = emitente_data["password"]
+            private_key, cert, _ = pkcs12.load_key_and_certificates(pfx_bytes, senha_cert.encode())
+
+            if cert is None:
+                return jsonify({"error": "Certificado inválido ou ausente no PFX."}), 400
+
+            now = datetime.utcnow()
+            not_before = cert.not_valid_before
+            not_after = cert.not_valid_after
+
+            if now < not_before:
+                return jsonify({"error": f"Certificado ainda não é válido. Início: {not_before}"}), 400
+            if now > not_after:
+                return jsonify({"error": f"Certificado expirado em: {not_after}"}), 400
+
+            # Extrai fingerprint (SHA256)
+            fingerprint = cert.fingerprint(hashes.SHA256()).hex().upper()
+
+        except ValueError as e:
+            return jsonify({"error": f"Erro ao processar certificado: {e}"}), 400
+        except Exception as e:
+            return jsonify({"error": f"Erro inesperado: {e}"}), 500
+
+        # Criptografa senha para armazenamento
+        encrypted_password = fernet.encrypt(senha_cert.encode()).decode()
 
         if emitente:
-            # Verifica tentativa de alteração de campos imutáveis
             if "client_code" in emitente_data and emitente_data["client_code"] != emitente.client_code:
                 return jsonify({"error": "'client_code' cannot be changed."}), 400
             if "cpf" in emitente_data and emitente_data["cpf"] != emitente.cpf:
@@ -203,20 +251,18 @@ def register_emitente():
             if "id" in emitente_data and str(emitente_data["id"]) != str(emitente.id):
                 return jsonify({"error": "'id' cannot be changed."}), 400
 
-            if "certificate" in emitente_data:
-                emitente.certificate = emitente_data["certificate"]
-            if encrypted_password:
-                emitente.password = encrypted_password
-
-            emitente.active = True  # Reativa o emitente
+            emitente.certificate = fingerprint  # Salva fingerprint
+            emitente.password = encrypted_password
+            emitente.certificate_expires_at = not_after
+            emitente.active = True
             message = "Emitente updated and enabled successfully."
         else:
-            # Criando novo
             new_emitente = Emitente(
                 client_code=client_code_in_req,
                 cpf=emitente_data["cpf"],
-                certificate=emitente_data["certificate"],
+                certificate=fingerprint,  # Salva fingerprint
                 password=encrypted_password,
+                certificate_expires_at=not_after,
                 active=True
             )
             db.session.add(new_emitente)
@@ -241,7 +287,6 @@ def register_emitente():
             return jsonify({"error": "Emitente not found for disable"}), 404
 
         emitente.active = False
-
         try:
             db.session.commit()
             return jsonify({
@@ -255,6 +300,7 @@ def register_emitente():
             db.session.rollback()
             return jsonify({"error": "DB error: " + str(e)}), 500
 
+
 @api_bp.route("/test-db")
 def test_db():
     try:
@@ -262,64 +308,6 @@ def test_db():
         return "Conexão com MySQL ok!"
     except Exception as e:
         return f"Erro ao conectar: {str(e)}"
-
-@api_bp.route('/validar-certificado', methods=['POST'])
-def validar_certificado():
-    if 'certificado' not in request.files:
-        return jsonify({"error": "Arquivo 'certificado' (.pfx) não enviado."}), 400
-
-    senha = request.form.get("senha")
-    if not senha:
-        return jsonify({"error": "Campo 'senha' não fornecido."}), 400
-
-    arquivo = request.files['certificado']
-    pfx_bytes = arquivo.read()
-
-    try:
-        private_key, cert, _ = pkcs12.load_key_and_certificates(
-            data=pfx_bytes,
-            password=senha.encode()
-        )
-        if cert is None:
-            return jsonify({"error": "Certificado inválido ou ausente no PFX."}), 400
-
-        # Verifica validade
-        now = datetime.utcnow()
-        not_before = cert.not_valid_before
-        not_after = cert.not_valid_after
-        if now < not_before:
-            return jsonify({"error": f"Certificado ainda não é válido. Início: {not_before}"}), 400
-        if now > not_after:
-            return jsonify({"error": f"Certificado expirado em: {not_after}"}), 400
-
-        # Extrai dados do certificado
-        subject = cert.subject
-        common_name = subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
-        serial_number = hex(cert.serial_number)[2:].upper()
-        document = extrair_documento(common_name)
-
-        return jsonify({
-            "message": "Certificado válido.",
-            "valid_until": not_after.strftime("%d/%m/%Y %H:%M"),
-            "data": {
-                "name": common_name,
-                "document": document,
-                "serial_number": serial_number
-            }
-        }), 200
-
-    except ValueError as e:
-        return jsonify({"error": f"Erro de senha ou estrutura do certificado: {e}"}), 400
-    except Exception as e:
-        return jsonify({"error": f"Erro inesperado: {e}"}), 500
-
-def extrair_documento(nome_cn):
-    """
-    Tenta extrair CPF ou CNPJ do campo Common Name do certificado.
-    Exemplo: "Gabriel da Silva:12345678900"
-    """
-    match = re.search(r'(\d{11}|\d{14})', nome_cn)
-    return match.group(1) if match else None
  
 """
 @api_bp.route('/emitentes/login-decrypt', methods=['POST'])
