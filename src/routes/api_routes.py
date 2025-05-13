@@ -152,51 +152,99 @@ def registrar_endpoint():
 @token_required
 def register_emitente():
     """
-    Registra um novo Emitente, criptografando a senha com Fernet.
+    Ativa (cria ou atualiza) ou desativa um emitente com base no campo 'action'.
+    A senha é criptografada com Fernet.
     """
     client_code = request.client_code
+
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
 
     data = request.get_json()
     emitente_data = data.get("req")
     if not emitente_data:
-        return jsonify({"error": "Missing 'emitente' field"}), 400
+        return jsonify({"error": "Missing 'req' field"}), 400
 
-    # Validação básica
-    for f in ("client_code","cpf","certificate","password"):
-        if not emitente_data.get(f):
-            return jsonify({"error": f"Missing field: {f}"}), 400
+    action = emitente_data.get("action")
+    if action not in {"enable", "disable"}:
+        return jsonify({"error": "Invalid 'action'. Use 'enable' or 'disable'."}), 400
 
-    # Checa duplicação de código
-    if Emitente.query.filter_by(client_code=emitente_data["client_code"]).first():
-        return jsonify({"error": "client_code already registered"}), 409
+    client_code_in_req = emitente_data.get("client_code")
+    if not client_code_in_req:
+        return jsonify({"error": "Missing field: client_code"}), 400
 
-    # Criptografa a senha
-    raw_password = emitente_data["password"].encode()
-    encrypted_password = fernet.encrypt(raw_password).decode()
+    emitente = Emitente.query.filter_by(client_code=client_code_in_req).first()
 
-    new_emitente = Emitente(
-        client_code      = emitente_data["client_code"],
-        cpf         = emitente_data["cpf"],
-        certificate = emitente_data["certificate"],
-        password       = encrypted_password
-    )
+    if action == "enable":
+        # Campos obrigatórios na criação
+        for field in ("cpf", "certificate", "password"):
+            if not emitente and not emitente_data.get(field):
+                return jsonify({"error": f"Missing field: {field}"}), 400
 
-    try:
-        db.session.add(new_emitente)
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"error": "DB error: " + str(e)}), 500
+        # Atualização ou criação
+        encrypted_password = fernet.encrypt(emitente_data["password"].encode()).decode() if emitente_data.get("password") else None
 
-    return jsonify({
-        "data": {
-            "id": new_emitente.id,
-            "client_code": new_emitente.client_code
-        },
-        "message": "Emitente registrado com sucesso."
-    }), 201   
+        if emitente:
+            # Verifica tentativa de alteração de campos imutáveis
+            if "client_code" in emitente_data and emitente_data["client_code"] != emitente.client_code:
+                return jsonify({"error": "'client_code' cannot be changed."}), 400
+            if "cpf" in emitente_data and emitente_data["cpf"] != emitente.cpf:
+                return jsonify({"error": "'cpf' cannot be changed."}), 400
+            if "id" in emitente_data and str(emitente_data["id"]) != str(emitente.id):
+                return jsonify({"error": "'id' cannot be changed."}), 400
+
+
+            if "certificate" in emitente_data:
+                emitente.certificate = emitente_data["certificate"]
+            if encrypted_password:
+                emitente.password = encrypted_password
+
+            emitente.active = True  # Reativa o emitente
+            message = "Emitente updated and enabled successfully."
+        else:
+            # Criando novo
+            new_emitente = Emitente(
+                client_code=client_code_in_req,
+                cpf=emitente_data["cpf"],
+                certificate=emitente_data["certificate"],
+                password=encrypted_password,
+                active=True
+            )
+            db.session.add(new_emitente)
+            emitente = new_emitente
+            message = "Emitente created and enabled successfully."
+
+        try:
+            db.session.commit()
+            return jsonify({
+                "data": {
+                    "id": emitente.id,
+                    "client_code": emitente.client_code
+                },
+                "message": message
+            }), 200
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({"error": "DB error: " + str(e)}), 500
+
+    elif action == "disable":
+        if not emitente:
+            return jsonify({"error": "Emitente not found for disable"}), 404
+
+        emitente.active = False
+
+        try:
+            db.session.commit()
+            return jsonify({
+                "data": {
+                    "id": emitente.id,
+                    "client_code": emitente.client_code
+                },
+                "message": "Emitente disabled successfully."
+            }), 200
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({"error": "DB error: " + str(e)}), 500
 
 @api_bp.route("/test-db")
 def test_db():

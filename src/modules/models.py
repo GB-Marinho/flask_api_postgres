@@ -61,6 +61,7 @@ class Emitente(db.Model):
     cpf = db.Column(db.String(11), nullable=False)
     certificate = db.Column(db.String(255), nullable=False)
     password = db.Column(db.String(255), nullable=False)
+    active = db.Column(db.Boolean, default=True)
     
 # Log de todas as tentativas de autenticação
 # (tanto sucesso quanto falha) para auditoria e segurança
