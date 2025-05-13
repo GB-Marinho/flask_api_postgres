@@ -8,6 +8,16 @@ from src.auth.jwt_auth import token_required
 from cryptography.fernet import Fernet
 import os
 
+
+
+from cryptography.hazmat.primitives.serialization import pkcs12
+from datetime import datetime
+from cryptography import x509
+from cryptography.x509.oid import NameOID
+import re
+
+
+
 fernet = Fernet(os.getenv("FERNET_KEY"))
 
 # Define the blueprint
@@ -193,7 +203,6 @@ def register_emitente():
             if "id" in emitente_data and str(emitente_data["id"]) != str(emitente.id):
                 return jsonify({"error": "'id' cannot be changed."}), 400
 
-
             if "certificate" in emitente_data:
                 emitente.certificate = emitente_data["certificate"]
             if encrypted_password:
@@ -253,6 +262,64 @@ def test_db():
         return "Conexão com MySQL ok!"
     except Exception as e:
         return f"Erro ao conectar: {str(e)}"
+
+@api_bp.route('/validar-certificado', methods=['POST'])
+def validar_certificado():
+    if 'certificado' not in request.files:
+        return jsonify({"error": "Arquivo 'certificado' (.pfx) não enviado."}), 400
+
+    senha = request.form.get("senha")
+    if not senha:
+        return jsonify({"error": "Campo 'senha' não fornecido."}), 400
+
+    arquivo = request.files['certificado']
+    pfx_bytes = arquivo.read()
+
+    try:
+        private_key, cert, _ = pkcs12.load_key_and_certificates(
+            data=pfx_bytes,
+            password=senha.encode()
+        )
+        if cert is None:
+            return jsonify({"error": "Certificado inválido ou ausente no PFX."}), 400
+
+        # Verifica validade
+        now = datetime.utcnow()
+        not_before = cert.not_valid_before
+        not_after = cert.not_valid_after
+        if now < not_before:
+            return jsonify({"error": f"Certificado ainda não é válido. Início: {not_before}"}), 400
+        if now > not_after:
+            return jsonify({"error": f"Certificado expirado em: {not_after}"}), 400
+
+        # Extrai dados do certificado
+        subject = cert.subject
+        common_name = subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+        serial_number = hex(cert.serial_number)[2:].upper()
+        document = extrair_documento(common_name)
+
+        return jsonify({
+            "message": "Certificado válido.",
+            "valid_until": not_after.strftime("%d/%m/%Y %H:%M"),
+            "data": {
+                "name": common_name,
+                "document": document,
+                "serial_number": serial_number
+            }
+        }), 200
+
+    except ValueError as e:
+        return jsonify({"error": f"Erro de senha ou estrutura do certificado: {e}"}), 400
+    except Exception as e:
+        return jsonify({"error": f"Erro inesperado: {e}"}), 500
+
+def extrair_documento(nome_cn):
+    """
+    Tenta extrair CPF ou CNPJ do campo Common Name do certificado.
+    Exemplo: "Gabriel da Silva:12345678900"
+    """
+    match = re.search(r'(\d{11}|\d{14})', nome_cn)
+    return match.group(1) if match else None
  
 """
 @api_bp.route('/emitentes/login-decrypt', methods=['POST'])
