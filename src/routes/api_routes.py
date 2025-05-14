@@ -9,15 +9,15 @@ from cryptography.fernet import Fernet
 import os
 from cryptography.hazmat.primitives import hashes
 
-
-
 from cryptography.hazmat.primitives.serialization import pkcs12
 from datetime import datetime
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 import re
 
-
+import boto3
+from botocore.exceptions import BotoCoreError, NoCredentialsError
+import tempfile
 
 fernet = Fernet(os.getenv("FERNET_KEY"))
 
@@ -97,14 +97,10 @@ def issue_receipt():
 
     # Simulated response per action
     receipt_key = "309C63F3-5F7D-4007-BD3B-53E3690E32B6"
-    if action == "issue":
-        file_url = "https://www.exemplo.com/receipt-issued.pdf"
-        message = "Issue request registered successfully"
+    if action == "issue":        message = "Issue request registered successfully"
     elif action == "cancel":
-        file_url = "https://www.exemplo.com/receipt-canceled.pdf"
         message = "Cancel request registered successfully"
     elif action == "consult":
-        file_url = "https://www.exemplo.com/receipt.pdf"
         message = "Consultation completed successfully"
     else:
         return jsonify({"error": "Invalid action."}), 400
@@ -115,7 +111,6 @@ def issue_receipt():
             "client_code": client_code,
             "success": True,
             "receipt_key": receipt_key,
-            "file_url": file_url,
             "message": message,
         }
     }), 200
@@ -158,12 +153,6 @@ def registrar_endpoint():
         "message": "Callback registrado com sucesso.",
         "callback_id": novo_callback.id
     }), 201
-    
-from flask import request, jsonify
-from cryptography.hazmat.primitives.serialization import pkcs12
-from cryptography.x509.oid import NameOID
-from datetime import datetime
-import re
 
 @api_bp.route('/emitentes', methods=['POST'])
 @token_required
@@ -240,6 +229,34 @@ def register_emitente():
         except Exception as e:
             return jsonify({"error": f"Erro inesperado: {e}"}), 500
 
+        # Upload para S3
+        def upload_certificado_s3(fingerprint: str, pfx_bytes: bytes):
+            s3 = boto3.client(
+                's3',
+                aws_access_key_id=os.getenv('AWS_ACCESS_KEY'),
+                aws_secret_access_key=os.getenv('AWS_SECRET_KEY'),
+                region_name='sa-east-1'
+            )
+
+            bucket = 'rs-easy'
+            key_name = f'cert/{fingerprint}.rbt'
+
+            try:
+                temp_path = os.path.join(tempfile.gettempdir(), f"{fingerprint}.pfx")
+                with open(temp_path, 'wb') as f:
+                    f.write(pfx_bytes)
+
+                s3.upload_file(temp_path, bucket, key_name)
+                os.remove(temp_path)
+                return True, None
+
+            except (BotoCoreError, NoCredentialsError, Exception) as e:
+                return False, str(e)
+
+        ok, err = upload_certificado_s3(fingerprint, pfx_bytes)
+        if not ok:
+            return jsonify({"error": f"Erro ao enviar certificado para o S3: {err}"}), 500
+
         # Criptografa senha para armazenamento
         encrypted_password = fernet.encrypt(senha_cert.encode()).decode()
 
@@ -251,7 +268,7 @@ def register_emitente():
             if "id" in emitente_data and str(emitente_data["id"]) != str(emitente.id):
                 return jsonify({"error": "'id' cannot be changed."}), 400
 
-            emitente.certificate = fingerprint  # Salva fingerprint
+            emitente.certificate = fingerprint
             emitente.password = encrypted_password
             emitente.certificate_expires_at = not_after
             emitente.active = True
@@ -260,7 +277,7 @@ def register_emitente():
             new_emitente = Emitente(
                 client_code=client_code_in_req,
                 cpf=emitente_data["cpf"],
-                certificate=fingerprint,  # Salva fingerprint
+                certificate=fingerprint,
                 password=encrypted_password,
                 certificate_expires_at=not_after,
                 active=True
