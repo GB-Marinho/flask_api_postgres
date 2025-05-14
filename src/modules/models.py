@@ -1,6 +1,7 @@
 from src.extensions import db
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
+import re
 
 # Registra recibos no banco de dados 
 class Receipt(db.Model):
@@ -29,22 +30,62 @@ class Receipt(db.Model):
 
     def load_from_dict(self, data_dict):
         self.issuer_code = int(data_dict.get("issuer_code")) if data_dict.get("issuer_code") else None
-        self.receipt_id = str(data_dict.get("receipt_id", ""))
+        self.receipt_id = int(data_dict.get("receipt_id", 0))
         self.payer = str(data_dict.get("payer", ""))
         self.beneficiary = str(data_dict.get("beneficiary", ""))
 
-        amount_str = str(data_dict.get("amount", "0")).replace(",", ".")
-        try:
-            self.amount = Decimal(amount_str)
-        except InvalidOperation:
-            raise ValueError(f"Valor inválido: {amount_str}")
+        # --- Validação e conversão flexível do valor ---
+        amount_raw = data_dict.get("amount", "0")
 
-        date_str = data_dict.get("date")
-        if date_str:
+        try:
+            if isinstance(amount_raw, (int, float, Decimal)):
+                # Ex: 9999.99 → Decimal direto
+                self.amount = Decimal(str(amount_raw))
+            else:
+                amount_str = str(amount_raw).strip()
+
+                # Formato BR: 1.234,56 ou 1234,56
+                if re.match(r"^\d{1,3}(\.\d{3})*(,\d{2})?$", amount_str) or re.match(r"^\d+(,\d{2})?$", amount_str):
+                    normalized = amount_str.replace(".", "").replace(",", ".")
+                    self.amount = Decimal(normalized)
+                # Formato internacional: "1234.56"
+                elif re.match(r"^\d+(\.\d{1,2})?$", amount_str):
+                    self.amount = Decimal(amount_str)
+                else:
+                    raise ValueError
+        except (InvalidOperation, ValueError):
+            raise ValueError(f"Valor inválido: {amount_raw}. Use 9999,99 ou 9999.99")
+        # ------------------------------------------------
+
+        date_input = data_dict.get("date")
+        if date_input:
             try:
-                self.date = datetime.strptime(date_str, "%d/%m/%Y").date()
-            except ValueError:
-                raise ValueError(f"Data inválida: {date_str}. Use o formato dd/mm/aaaa.")
+                if isinstance(date_input, dict):
+                    year = int(date_input.get("year"))
+                    month = int(date_input.get("month"))
+                    day = int(date_input.get("day"))
+                    parsed_date = datetime(year, month, day).date()
+
+                elif isinstance(date_input, date):
+                    parsed_date = date_input if not isinstance(date_input, datetime) else date_input.date()
+
+                elif isinstance(date_input, str):
+                    try:
+                        parsed_date = datetime.fromisoformat(date_input).date()
+                    except ValueError:
+                        parsed_date = datetime.strptime(date_input, "%d/%m/%Y").date()
+
+                else:
+                    raise ValueError
+
+                # 🚫 Verificação do período permitido
+                if parsed_date < date(2025, 1, 1) or parsed_date > date.today():
+                    raise ValueError("Date is outside the allowed emission period")
+
+                self.date = parsed_date
+
+            except Exception as e:
+                raise ValueError(str(e))
 
         self.description = data_dict.get("description", "")
 
