@@ -11,16 +11,16 @@ from src.modules.models import TokenAtual
 SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 
 # === Emissão de token ===
-def generate_token(client_code):
+def generate_token(issuer_code):
     jti = secrets.token_hex(16)
     payload = {
-        "sub": client_code,
+        "sub": issuer_code,
         "jti": jti,
         "iat": datetime.now(timezone.utc)
     }
     
     token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
-    salvar_token_valido(client_code, jti)  # ← esta função abaixo
+    salvar_token_valido(issuer_code, jti)  # ← esta função abaixo
     return token
 
 # === Validação de token ===
@@ -35,14 +35,14 @@ def token_required(f):
         try:
             decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
             jti = decoded.get("jti")
-            client_code = decoded.get("sub")
+            issuer_code = decoded.get("sub")
 
             # Verifica se o jti ainda é o válido
-            token_armazenado = db.session.get(TokenAtual, client_code)
+            token_armazenado = db.session.get(TokenAtual, issuer_code)
             if not token_armazenado or token_armazenado.jti != jti:
                 return jsonify({"error": "Token revogado"}), 401
 
-            request.client_code = client_code
+            request.issuer_code = issuer_code
 
         except jwt.ExpiredSignatureError:
             return jsonify({"error": "Token expirado"}), 401
@@ -52,11 +52,11 @@ def token_required(f):
         return f(*args, **kwargs)
     return decorated
 
-def salvar_token_valido(client_code, jti):
-    registro = db.session.get(TokenAtual, client_code)
+def salvar_token_valido(issuer_code, jti):
+    registro = db.session.get(TokenAtual, issuer_code)
     if registro:
         registro.jti = jti
     else:
-        registro = TokenAtual(client_code=client_code, jti=jti)
+        registro = TokenAtual(issuer_code=issuer_code, jti=jti)
         db.session.add(registro)
     db.session.commit()

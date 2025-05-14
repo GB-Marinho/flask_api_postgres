@@ -1,8 +1,8 @@
 from flask import Blueprint, request, jsonify
 from src.extensions import db # Import db from extensions
-from src.modules.models import Recibo
+from src.modules.models import Receipt
 from sqlalchemy import text
-from src.modules.models import Emitente
+from src.modules.models import Issuer
 from src.modules.models import EndpointUrl
 from src.auth.jwt_auth import token_required
 from cryptography.fernet import Fernet
@@ -11,9 +11,6 @@ from cryptography.hazmat.primitives import hashes
 
 from cryptography.hazmat.primitives.serialization import pkcs12
 from datetime import datetime
-from cryptography import x509
-from cryptography.x509.oid import NameOID
-import re
 
 import boto3
 from botocore.exceptions import BotoCoreError, NoCredentialsError
@@ -26,15 +23,10 @@ api_bp = Blueprint(
     'api_bp', __name__
 )
 
-@api_bp.route('/emitir-recibo', methods=['POST'])
+@api_bp.route('/issue-receipt', methods=['POST'])
 @token_required
 def issue_receipt():
-    """
-    Endpoint to receive requests to issue, cancel, or consult receipts.
-    The action is defined by the 'action' field inside the 'req' object.
-    """
-    client_code = request.client_code  # extracted from token
-    # print(f"Valid token for client {client_code}")
+    issuer_code = request.issuer_code  # extracted from token
 
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
@@ -42,14 +34,12 @@ def issue_receipt():
     data = request.get_json()
     req = data.get("req")
 
-    # print(f"Received data: {req}")
-
     if not req:
         return jsonify({"error": "Missing 'req' field in request body."}), 400
 
     action      = req.get("action")
     receipt_id  = req.get("receipt_id")
-    client_code = req.get("client_code")
+    issuer_code = req.get("issuer_code")
     payer       = req.get("payer")
     amount      = req.get("amount")
     date        = req.get("date")
@@ -57,36 +47,39 @@ def issue_receipt():
 
     if not action:
         return jsonify({"error": "The 'action' field is required."}), 400
-    if not client_code:
-        return jsonify({"error": "The 'client_code' field is required."}), 400
+    if not issuer_code:
+        return jsonify({"error": "The 'issuer_code' field is required."}), 400
 
-    issuer = Emitente.query.filter_by(client_code=client_code).first()
+    issuer = Issuer.query.filter_by(issuer_code=issuer_code).first()
     if not issuer:
-        # print(f"[ERROR] Client '{client_code}' not found.")
-        return jsonify({"error": f"Client '{client_code}' is not registered."}), 404
+        return jsonify({"error": f"Issuer '{issuer_code}' is not registered."}), 404
+
+    if not issuer.active:
+        return jsonify({"error": "Issuer is deactivated. Cannot issue receipts."}), 403
+
+    if issuer.certificate_expires_at and issuer.certificate_expires_at < datetime.utcnow():
+        vencimento = issuer.certificate_expires_at.strftime("%d/%m/%Y %H:%M")
+        return jsonify({"error": f"Certificate expired on {vencimento}. Please update it to continue."}), 403
 
     required_map = {
-        "issue":   ["action", "receipt_id", "client_code", "payer", "amount", "date", "description"],
-        "cancel":  ["action", "receipt_id", "client_code", "description"],
-        "consult": ["action", "receipt_id", "client_code"]
+        "issue":   ["action", "receipt_id", "issuer_code", "payer", "amount", "date", "description"],
+        "cancel":  ["action", "receipt_id", "issuer_code", "description"],
+        "consult": ["action", "receipt_id", "issuer_code"]
     }
-    
-    required = required_map.get(action)
 
+    required = required_map.get(action)
     if required is None:
         return jsonify({
             "error": f"Unsupported action '{action}'. Use 'issue', 'cancel' or 'consult'."
         }), 400
 
-    # checa quais campos faltam
     missing = [field for field in required if field not in req]
     if missing:
         return jsonify({
             "error": f"Missing required fields: {', '.join(missing)}"
         }), 400
-    
-    # registra no banco
-    receipt = Recibo()
+
+    receipt = Receipt()
     try:
         receipt.load_from_dict(req)
         db.session.add(receipt)
@@ -95,9 +88,9 @@ def issue_receipt():
         db.session.rollback()
         return jsonify({"error": str(e)}), 400
 
-    # Simulated response per action
     receipt_key = "309C63F3-5F7D-4007-BD3B-53E3690E32B6"
-    if action == "issue":        message = "Issue request registered successfully"
+    if action == "issue":
+        message = "Issue request registered successfully"
     elif action == "cancel":
         message = "Cancel request registered successfully"
     elif action == "consult":
@@ -108,9 +101,8 @@ def issue_receipt():
     return jsonify({
         "data": {
             "receipt_id": str(req["receipt_id"]),
-            "client_code": client_code,
+            "issuer_code": issuer_code,
             "success": True,
-            "receipt_key": receipt_key,
             "message": message,
         }
     }), 200
@@ -118,17 +110,13 @@ def issue_receipt():
 @api_bp.route('/endpoint', methods=['POST'])
 @token_required
 def registrar_endpoint():
-    """
-    Registra uma URL de endpoint fornecida por um cliente.
-    Requer autenticação via token.
-    """
-    client_code = request.client_code
+    issuer_code = request.issuer_code
     if not request.is_json:
         return jsonify({"error": "O corpo da requisição deve estar em formato JSON."}), 400
 
     data = request.get_json()
     url = data.get("url")
-    token_endpoint = data.get("token")  # token que o sistema deve enviar no callback
+    token_endpoint = data.get("token")
 
     if not url or not token_endpoint:
         return jsonify({"error": "Campos 'url' e 'token' são obrigatórios."}), 400
@@ -136,7 +124,7 @@ def registrar_endpoint():
     ip_remoto = request.headers.get('X-Forwarded-For', request.remote_addr)
 
     novo_callback = EndpointUrl(
-        client_code=client_code,
+        issuer_code=issuer_code,
         url=url,
         token=token_endpoint,
         ip=ip_remoto
@@ -152,171 +140,170 @@ def registrar_endpoint():
     return jsonify({
         "message": "Callback registrado com sucesso.",
         "callback_id": novo_callback.id
-    }), 201
+    }), 200
 
-@api_bp.route('/emitentes', methods=['POST'])
+
+@api_bp.route('/issuers', methods=['POST'])
 @token_required
-def register_emitente():
+def register_issuer():
     """
-    Ativa (cria ou atualiza) ou desativa um emitente com base no campo 'action'.
+    Ativa (cria ou atualiza) ou desativa um issuer com base no campo 'action'.
     A senha do certificado é criptografada com Fernet e validada.
     """
-    client_code = request.client_code
+    issuer_code = request.issuer_code
 
-    # Suporte a multipart/form-data ou JSON puro
-    is_multipart = 'multipart/form-data' in request.content_type
+    issuer_data = {}
+    file = None
+    is_multipart = 'multipart/form-data' in request.content_type if request.content_type else False
 
     if is_multipart:
-        emitente_data = {
+        issuer_data = {
             "action": request.form.get("action"),
-            "client_code": request.form.get("client_code"),
+            "issuer_code": request.form.get("issuer_code"),
             "cpf": request.form.get("cpf"),
             "password": request.form.get("password"),
         }
         file = request.files.get("certificate")
-        if not file:
-            return jsonify({"error": "Arquivo de certificado (.pfx) não enviado."}), 400
-        pfx_bytes = file.read()
-    else:
-        if not request.is_json:
-            return jsonify({"error": "Request must be JSON"}), 400
+    elif request.is_json:
         data = request.get_json()
-        emitente_data = data.get("req")
-        if not emitente_data:
-            return jsonify({"error": "Missing 'req' field"}), 400
-        try:
-            pfx_bytes = bytes.fromhex(emitente_data["certificate"])
-        except Exception:
-            return jsonify({"error": "Campo 'certificate' deve estar em formato hexadecimal."}), 400
+        issuer_data = data.get("req")
+        if not issuer_data:
+            return jsonify({"error_code": "ISSUERS_ERROR_001", "error_message": "Missing 'req' field"}), 400
+    else:
+        return jsonify({"error_code": "ISSUERS_ERROR_002", "error_message": "Content-Type deve ser multipart/form-data ou application/json."}), 400
 
-    action = emitente_data.get("action")
+    action = issuer_data.get("action")
     if action not in {"enable", "disable"}:
-        return jsonify({"error": "Invalid 'action'. Use 'enable' or 'disable'."}), 400
+        return jsonify({"error_code": "ISSUERS_ERROR_003", "error_message": "Invalid 'action'. Use 'enable' or 'disable'."}), 400
 
-    client_code_in_req = emitente_data.get("client_code")
-    if not client_code_in_req:
-        return jsonify({"error": "Missing field: client_code"}), 400
+    issuer_code_in_req = issuer_data.get("issuer_code")
+    if not issuer_code_in_req:
+        return jsonify({"error_code": "ISSUERS_ERROR_004", "error_message": "Missing field: issuer_code"}), 400
 
-    emitente = Emitente.query.filter_by(client_code=client_code_in_req).first()
+    issuer = Issuer.query.filter_by(issuer_code=issuer_code_in_req).first()
 
     if action == "enable":
-        for field in ("cpf", "password"):
-            if not emitente and not emitente_data.get(field):
-                return jsonify({"error": f"Missing field: {field}"}), 400
+        if not issuer and not file:
+            return jsonify({"error_code": "ISSUERS_ERROR_005", "error_message": "Certificate file (.pfx) is required for new issuer."}), 400
+        if not issuer and not issuer_data.get("cpf"):
+            return jsonify({"error_code": "ISSUERS_ERROR_006", "error_message": "Missing field: cpf"}), 400
+        if not issuer and not issuer_data.get("password"):
+            return jsonify({"error_code": "ISSUERS_ERROR_007", "error_message": "Missing field: password"}), 400
 
-        # Valida o certificado e obtém vencimento
-        try:
-            senha_cert = emitente_data["password"]
-            private_key, cert, _ = pkcs12.load_key_and_certificates(pfx_bytes, senha_cert.encode())
-
-            if cert is None:
-                return jsonify({"error": "Certificado inválido ou ausente no PFX."}), 400
-
-            now = datetime.utcnow()
-            not_before = cert.not_valid_before
-            not_after = cert.not_valid_after
-
-            if now < not_before:
-                return jsonify({"error": f"Certificado ainda não é válido. Início: {not_before}"}), 400
-            if now > not_after:
-                return jsonify({"error": f"Certificado expirado em: {not_after}"}), 400
-
-            # Extrai fingerprint (SHA256)
-            fingerprint = cert.fingerprint(hashes.SHA256()).hex().upper()
-
-        except ValueError as e:
-            return jsonify({"error": f"Erro ao processar certificado: {e}"}), 400
-        except Exception as e:
-            return jsonify({"error": f"Erro inesperado: {e}"}), 500
-
-        # Upload para S3
-        def upload_certificado_s3(fingerprint: str, pfx_bytes: bytes):
-            s3 = boto3.client(
-                's3',
-                aws_access_key_id=os.getenv('AWS_ACCESS_KEY'),
-                aws_secret_access_key=os.getenv('AWS_SECRET_KEY'),
-                region_name='sa-east-1'
-            )
-
-            bucket = 'rs-easy'
-            key_name = f'cert/{fingerprint}.rbt'
-
+        if file:
+            pfx_bytes = file.read()
             try:
-                temp_path = os.path.join(tempfile.gettempdir(), f"{fingerprint}.pfx")
-                with open(temp_path, 'wb') as f:
-                    f.write(pfx_bytes)
+                senha_cert = issuer_data["password"]
+                private_key, cert, _ = pkcs12.load_key_and_certificates(pfx_bytes, senha_cert.encode())
 
-                s3.upload_file(temp_path, bucket, key_name)
-                os.remove(temp_path)
-                return True, None
+                if cert is None:
+                    return jsonify({"error_code": "ISSUERS_ERROR_008", "error_message": "Invalid or missing certificate in the PFX file."}), 400
 
-            except (BotoCoreError, NoCredentialsError, Exception) as e:
-                return False, str(e)
+                now = datetime.utcnow()
+                not_before = cert.not_valid_before
+                not_after = cert.not_valid_after
 
-        ok, err = upload_certificado_s3(fingerprint, pfx_bytes)
-        if not ok:
-            return jsonify({"error": f"Erro ao enviar certificado para o S3: {err}"}), 500
+                if now < not_before:
+                    return jsonify({"error_code": "ISSUERS_ERROR_009", "error_message": f"Certificate is not yet valid. Start date: {not_before}"}), 400
+                if now > not_after:
+                    return jsonify({"error_code": "ISSUERS_ERROR_010", "error_message": f"Certificate expired on: {not_after}"}), 400
 
-        # Criptografa senha para armazenamento
-        encrypted_password = fernet.encrypt(senha_cert.encode()).decode()
+                fingerprint = cert.fingerprint(hashes.SHA256()).hex().upper()
 
-        if emitente:
-            if "client_code" in emitente_data and emitente_data["client_code"] != emitente.client_code:
-                return jsonify({"error": "'client_code' cannot be changed."}), 400
-            if "cpf" in emitente_data and emitente_data["cpf"] != emitente.cpf:
-                return jsonify({"error": "'cpf' cannot be changed."}), 400
-            if "id" in emitente_data and str(emitente_data["id"]) != str(emitente.id):
-                return jsonify({"error": "'id' cannot be changed."}), 400
+            except ValueError as e:
+                return jsonify({"error_code": "ISSUERS_ERROR_011", "error_message": f"Error processing certificate: {e}"}), 400
+            except Exception as e:
+                return jsonify({"error_code": "ISSUERS_ERROR_012", "error_message": f"Unexpected error: {e}"}), 500
 
-            emitente.certificate = fingerprint
-            emitente.password = encrypted_password
-            emitente.certificate_expires_at = not_after
-            emitente.active = True
-            message = "Emitente updated and enabled successfully."
-        else:
-            new_emitente = Emitente(
-                client_code=client_code_in_req,
-                cpf=emitente_data["cpf"],
-                certificate=fingerprint,
-                password=encrypted_password,
-                certificate_expires_at=not_after,
-                active=True
-            )
-            db.session.add(new_emitente)
-            emitente = new_emitente
-            message = "Emitente created and enabled successfully."
+            def upload_certificado_s3(fingerprint: str, pfx_bytes: bytes):
+                s3 = boto3.client(
+                    's3',
+                    aws_access_key_id=os.getenv('AWS_ACCESS_KEY'),
+                    aws_secret_access_key=os.getenv('AWS_SECRET_KEY'),
+                    region_name='sa-east-1'
+                )
+
+                bucket = 'rs-easy'
+                key_name = f'cert/{fingerprint}.rbt'
+
+                try:
+                    temp_path = os.path.join(tempfile.gettempdir(), f"{fingerprint}.pfx")
+                    with open(temp_path, 'wb') as f:
+                        f.write(pfx_bytes)
+
+                    s3.upload_file(temp_path, bucket, key_name)
+                    os.remove(temp_path)
+                    return True, None
+
+                except (BotoCoreError, NoCredentialsError, Exception) as e:
+                    return False, str(e)
+
+            ok, err = upload_certificado_s3(fingerprint, pfx_bytes)
+            if not ok:
+                return jsonify({"error_code": "ISSUERS_ERROR_013", "error_message": f"Error uploading certificate to S3: {err}"}), 500
+
+            encrypted_password = fernet.encrypt(senha_cert.encode()).decode()
+
+            if issuer:
+                if "issuer_code" in issuer_data and issuer_data["issuer_code"] != issuer.issuer_code:
+                    return jsonify({"error_code": "ISSUERS_ERROR_014", "error_message": "'issuer_code' cannot be changed."}), 400
+                if "cpf" in issuer_data and issuer_data["cpf"] != issuer.cpf:
+                    return jsonify({"error_code": "ISSUERS_ERROR_015", "error_message": "'cpf' cannot be changed."}), 400
+                if "id" in issuer_data and str(issuer_data["id"]) != str(issuer.id):
+                    return jsonify({"error_code": "ISSUERS_ERROR_016", "error_message": "'id' cannot be changed."}), 400
+
+                issuer.certificate = fingerprint
+                issuer.password = encrypted_password
+                issuer.certificate_expires_at = not_after
+                issuer.active = True
+                message = "Issuer updated and enabled successfully."
+            else:
+                new_issuer = Issuer(
+                    issuer_code=issuer_code_in_req,
+                    cpf=issuer_data["cpf"],
+                    certificate=fingerprint,
+                    password=encrypted_password,
+                    certificate_expires_at=not_after,
+                    active=True
+                )
+                db.session.add(new_issuer)
+                issuer = new_issuer
+                message = "Issuer created and enabled successfully."
+
+        elif issuer:
+            issuer.active = True
+            message = "Issuer reactivated successfully."
 
         try:
             db.session.commit()
             return jsonify({
                 "data": {
-                    "id": emitente.id,
-                    "client_code": emitente.client_code
+                    "id": issuer.id,
+                    "issuer_code": issuer.issuer_code
                 },
                 "message": message
             }), 200
         except Exception as e:
             db.session.rollback()
-            return jsonify({"error": "DB error: " + str(e)}), 500
+            return jsonify({"error_code": "ISSUERS_ERROR_017", "error_message": "DB error: " + str(e)}), 500
 
     elif action == "disable":
-        if not emitente:
-            return jsonify({"error": "Emitente not found for disable"}), 404
+        if not issuer:
+            return jsonify({"error_code": "ISSUERS_ERROR_018", "error_message": "Issuer not found for disable"}), 404
 
-        emitente.active = False
+        issuer.active = False
         try:
             db.session.commit()
             return jsonify({
                 "data": {
-                    "id": emitente.id,
-                    "client_code": emitente.client_code
+                    "id": issuer.id,
+                    "issuer_code": issuer.issuer_code
                 },
-                "message": "Emitente disabled successfully."
+                "message": "Issuer disabled successfully."
             }), 200
         except Exception as e:
             db.session.rollback()
-            return jsonify({"error": "DB error: " + str(e)}), 500
-
+            return jsonify({"error_code": "ISSUERS_ERROR_019", "error_message": "DB error: " + str(e)}), 500
 
 @api_bp.route("/test-db")
 def test_db():
