@@ -27,8 +27,16 @@ COPY . .
 # Fly.io typically expects applications to listen on 8080
 EXPOSE 8080
 
+
 # Define the command to run the application
 # Use gunicorn for production environments eventually, but start with Flask dev server
 # For production with Fly.io, you might switch to:
 CMD ["gunicorn", "--bind", ":8080", "--workers", "4", "wsgi:app"]
 # CMD ["python", "src/main.py"]
+
+# Copia o script e dá permissão
+# COPY entrypoint.sh /app/entrypoint.sh
+# RUN chmod +x /app/entrypoint.sh
+
+# Usa o script como ponto de entrada
+#ENTRYPOINT ["/app/entrypoint.sh"]

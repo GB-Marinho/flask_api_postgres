@@ -23,7 +23,7 @@ api_bp = Blueprint(
     'api_bp', __name__
 )
 
-@api_bp.route('/issue-receipt', methods=['POST'])
+@api_bp.route('/receipts', methods=['POST'])
 @token_required
 def issue_receipt():
     issuer_code = request.issuer_code  # extracted from token
@@ -44,6 +44,7 @@ def issue_receipt():
     amount      = req.get("amount")
     date        = req.get("date")
     description = req.get("description")
+    test_flag   = req.get("test", False)
 
     if not action:
         return jsonify({"error": "The 'action' field is required."}), 400
@@ -79,9 +80,22 @@ def issue_receipt():
             "error": f"Missing required fields: {', '.join(missing)}"
         }), 400
 
+    # 🔒 Verifica duplicidade com mesmo test
+    existing = Receipt.query.filter_by(
+        receipt_id=receipt_id,
+        issuer_code=issuer_code,
+        test=bool(test_flag)
+    ).first()
+
+    if existing:
+        return jsonify({
+            "error": f"A receipt with this receipt_id and issuer_code already exists."
+        }), 409
+
     receipt = Receipt()
     try:
         receipt.load_from_dict(req)
+        receipt.test = bool(test_flag)
         db.session.add(receipt)
         db.session.commit()
     except ValueError as e:

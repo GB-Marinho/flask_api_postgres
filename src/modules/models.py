@@ -15,6 +15,7 @@ class Receipt(db.Model):
     amount = db.Column(db.Numeric(10, 2), nullable=False)
     date = db.Column(db.Date)
     description = db.Column(db.String(255))
+    test = db.Column(db.Boolean, default=False)
     Status = db.Column(db.SmallInteger, default=0)
     DataRS = db.Column(db.DateTime)
     Retorno = db.Column(db.DateTime)

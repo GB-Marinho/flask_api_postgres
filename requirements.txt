@@ -17,3 +17,4 @@ gunicorn
 cryptography
 pyOpenSSL
 boto3
+Flask-Migrate
