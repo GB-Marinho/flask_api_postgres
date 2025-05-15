@@ -4,6 +4,8 @@ from src.auth.admin_jwt_auth import generate_admin_token
 from src.auth.jwt_auth import generate_token
 from datetime import datetime
 from src.auth.auth_log import registrar_log_auth
+from src.modules.models import MasterKeyAccess
+from src.extensions import db
 
 MASTER_KEY = os.getenv("MASTER_KEY", "default-key")
 ADMIN_MASTER_KEY = os.getenv("ADMIN_MASTER_KEY", "default-admin-key")
@@ -35,7 +37,7 @@ def emitir_token():
 
     token = generate_token("cliente_unico")
 
-    print(f"[{datetime.now()}] ✅ Token issued successfully")
+    ### print(f"[{datetime.now()}] ✅ Token issued successfully")
 
     return jsonify({
         "access_token": token,
@@ -67,9 +69,38 @@ def emitir_token_admin():
 
     token = generate_admin_token("admin")  # Use "admin" or replace with ID/email
 
-    print(f"[{datetime.now()}] ✅ Admin token issued successfully")
+    ### print(f"[{datetime.now()}] ✅ Admin token issued successfully")
 
     return jsonify({
         "access_token": token,
         "token_type": "Bearer"
+    }), 200
+    
+@auth_bp.route("/masterkey-generate", methods=["GET"])
+def gerar_masterkey_uma_vez():
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    now = datetime.utcnow()
+
+    registro = MasterKeyAccess.query.first()
+
+    if registro and registro.used:
+        return jsonify({
+            "error_code": "MASTERKEY_ERROR_001",
+            "error_message": "This endpoint has already been accessed. The master key is no longer available."
+        }), 403
+
+    if not registro:
+        registro = MasterKeyAccess(used=True, timestamp=now, ip=ip)
+        db.session.add(registro)
+    else:
+        registro.used = True
+        registro.timestamp = now
+        registro.ip = ip
+
+    db.session.commit()
+
+    ### print(f"[{now}] 🔐 MASTER_KEY entregue via banco para IP {ip}.")
+
+    return jsonify({
+        "master_key": MASTER_KEY
     }), 200

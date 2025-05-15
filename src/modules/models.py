@@ -131,3 +131,11 @@ class AdminTokenAtual(db.Model):
     
     admin_id = db.Column(db.String, primary_key=True)
     jti = db.Column(db.String, nullable=False)
+    
+class MasterKeyAccess(db.Model):
+    __tablename__ = "masterkey_access"
+
+    id = db.Column(db.Integer, primary_key=True)
+    used = db.Column(db.Boolean, default=False, nullable=False)
+    timestamp = db.Column(db.DateTime, nullable=True)
+    ip = db.Column(db.String(45), nullable=True)  # Suporta IPv6 também

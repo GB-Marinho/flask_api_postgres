@@ -1,5 +1,6 @@
 import sys
 import os
+from flask import abort
 
 # Garante que o diretório src esteja no caminho do Python
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -22,7 +23,7 @@ def create_app():
     database_url = os.getenv("DATABASE_URL")
     if database_url:
         # Trata URL do Postgres do Fly.io (substitui postgres:// por postgresql:// para SQLAlchemy)
-        print("Encontrado DATABASE_URL")  # Linha de depuração
+        ### print("Encontrado DATABASE_URL")  # Linha de depuração
         if database_url.startswith("postgres://"):
             database_url = database_url.replace("postgres://", "postgresql://", 1)
         # Mantém verificação do MySQL para flexibilidade com MySQL externo
@@ -31,13 +32,13 @@ def create_app():
             database_url = database_url.replace("mysql://", "mysql+pymysql://", 1)
 
         app.config["SQLALCHEMY_DATABASE_URI"] = database_url
-        print(
-            f"Usando banco de dados: "
-            f"{app.config['SQLALCHEMY_DATABASE_URI'].split('@')[1] if '@' in app.config['SQLALCHEMY_DATABASE_URI'] else 'SQLite ou Desconhecido'}"
-        )  # Exibe tipo do DB sem credenciais
+        ### print(
+        ###     f"Usando banco de dados: "
+        ###     f"{app.config['SQLALCHEMY_DATABASE_URI'].split('@')[1] if '@' in app.config['SQLALCHEMY_DATABASE_URI'] else 'SQLite ou Desconhecido'}"
+        ### )  # Exibe tipo do DB sem credenciais
     else:
         # Alternativa para desenvolvimento local (SQLite)
-        print("AVISO: variável DATABASE_URL não definida. Usando SQLite local padrão.")
+        ### print("AVISO: variável DATABASE_URL não definida. Usando SQLite local padrão.")
         instance_path = os.path.join(app.instance_path)
         os.makedirs(instance_path, exist_ok=True)
         app.config["SQLALCHEMY_DATABASE_URI"] = (
@@ -64,16 +65,19 @@ def create_app():
 
     # --- Rota Básica para Teste ---
     @app.route("/")
-    def hello_world():
-        return "Flask API Status is running!"
+    #def hello_world():
+    #    return "Flask API Status is running!"
+    
+    def home_blocked():
+        abort(404)
 
     # --- Criação de tabelas no contexto da aplicação ---
     # Isso criará as tabelas com base nos models para o DB configurado (SQLite, Postgres, MySQL)
     
     with app.app_context():
-        print("Garantindo existência das tabelas no banco...")
+        ### print("Garantindo existência das tabelas no banco...")
         db.create_all()
-        print("Tabelas do banco verificadas/criadas.")
+        ### print("Tabelas do banco verificadas/criadas.")
 
     """
     with app.app_context():

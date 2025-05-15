@@ -496,23 +496,23 @@ def update_task_return():
             }), 404
 
         # Campos opcionais a atualizar
-        if "Status" in data:
-            receipt.Status = data["Status"]
+        if "status" in data:
+            receipt.Status = data["status"]
 
-        if "DataRs" in data:
+        if "process_date" in data:
             try:
-                receipt.DataRS = datetime.fromisoformat(data["DataRs"])
+                receipt.DataRS = datetime.fromisoformat(data["process_date"])
             except Exception:
                 return jsonify({
                     "error_code": "TASK_RETURN_ERROR_003",
-                    "error_message": "Invalid format for DataRs. Use ISO 8601."
+                    "error_message": "Invalid format for process_date. Use ISO 8601."
                 }), 400
 
-        if "Chave" in data:
-            receipt.Chave = data["Chave"]
+        if "key" in data:
+            receipt.Chave = data["key"]
 
-        if "Numero" in data:
-            receipt.Numero = data["Numero"]
+        if "receipt_number" in data:
+            receipt.Numero = data["receipt_number"]
 
         db.session.commit()
 
@@ -579,14 +579,6 @@ def query_receipt_status():
             "error_message": "Unexpected error.",
             "details": str(e)
         }), 500
-
-@api_bp.route("/test-db")
-def test_db():
-    try:
-        result = db.session.execute(text("SELECT 1"))
-        return "Conexão com MySQL ok!"
-    except Exception as e:
-        return f"Erro ao conectar: {str(e)}"
  
 """
 @api_bp.route('/emitentes/login-decrypt', methods=['POST'])
