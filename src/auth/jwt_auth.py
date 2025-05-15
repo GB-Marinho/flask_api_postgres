@@ -28,26 +28,41 @@ def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         auth_header = request.headers.get("Authorization")
+
         if not auth_header or not auth_header.startswith("Bearer "):
-            return jsonify({"error": "Token ausente ou inválido"}), 401
+            return jsonify({
+                "error_code": "AUTH_ERROR_003",
+                "error_message": "Missing or invalid Authorization header."
+            }), 401
 
         token = auth_header.split()[1]
+
         try:
             decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
             jti = decoded.get("jti")
             issuer_code = decoded.get("sub")
 
-            # Verifica se o jti ainda é o válido
+            # Verifica se o jti ainda é válido
             token_armazenado = db.session.get(TokenAtual, issuer_code)
             if not token_armazenado or token_armazenado.jti != jti:
-                return jsonify({"error": "Token revogado"}), 401
+                return jsonify({
+                    "error_code": "AUTH_ERROR_004",
+                    "error_message": "Token has been revoked."
+                }), 401
 
             request.issuer_code = issuer_code
 
         except jwt.ExpiredSignatureError:
-            return jsonify({"error": "Token expirado"}), 401
+            return jsonify({
+                "error_code": "AUTH_ERROR_005",
+                "error_message": "Token has expired."
+            }), 401
+
         except jwt.InvalidTokenError:
-            return jsonify({"error": "Token inválido"}), 401
+            return jsonify({
+                "error_code": "AUTH_ERROR_006",
+                "error_message": "Invalid token."
+            }), 401
 
         return f(*args, **kwargs)
     return decorated

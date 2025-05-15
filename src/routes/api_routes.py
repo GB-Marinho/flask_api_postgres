@@ -1,7 +1,8 @@
 from flask import Blueprint, request, jsonify
+from src.auth.admin_jwt_auth import admin_token_required
 from src.extensions import db # Import db from extensions
 from src.modules.models import Receipt
-from sqlalchemy import text
+from sqlalchemy import or_, text
 from src.modules.models import Issuer
 from src.modules.models import EndpointUrl
 from src.auth.jwt_auth import token_required
@@ -26,16 +27,22 @@ api_bp = Blueprint(
 @api_bp.route('/receipts', methods=['POST'])
 @token_required
 def issue_receipt():
-    issuer_code = request.issuer_code  # extracted from token
+    issuer_code = request.issuer_code  # Extraído do token
 
     if not request.is_json:
-        return jsonify({"error": "Request must be JSON"}), 400
+        return jsonify({
+            "error_code": "RECEIPT_ERROR_001",
+            "error_message": "Request must be JSON"
+        }), 400
 
     data = request.get_json()
     req = data.get("req")
 
     if not req:
-        return jsonify({"error": "Missing 'req' field in request body."}), 400
+        return jsonify({
+            "error_code": "RECEIPT_ERROR_002",
+            "error_message": "Missing 'req' field in request body."
+        }), 400
 
     action      = req.get("action")
     receipt_id  = req.get("receipt_id")
@@ -44,52 +51,103 @@ def issue_receipt():
     amount      = req.get("amount")
     date        = req.get("date")
     description = req.get("description")
+    reason      = req.get("reason")
     test_flag   = req.get("test", False)
 
     if not action:
-        return jsonify({"error": "The 'action' field is required."}), 400
+        return jsonify({
+            "error_code": "RECEIPT_ERROR_003",
+            "error_message": "The 'action' field is required."
+        }), 400
+
     if not issuer_code:
-        return jsonify({"error": "The 'issuer_code' field is required."}), 400
+        return jsonify({
+            "error_code": "RECEIPT_ERROR_004",
+            "error_message": "Missing field: issuer_code"
+        }), 400
 
     issuer = Issuer.query.filter_by(issuer_code=issuer_code).first()
     if not issuer:
-        return jsonify({"error": f"Issuer '{issuer_code}' is not registered."}), 404
+        return jsonify({
+            "error_code": "ISSUER_ERROR_001",
+            "error_message": f"Issuer '{issuer_code}' is not registered."
+        }), 404
 
     if not issuer.active:
-        return jsonify({"error": "Issuer is deactivated. Cannot issue receipts."}), 403
+        return jsonify({
+            "error_code": "ISSUER_ERROR_002",
+            "error_message": "Issuer is deactivated. Cannot issue receipts."
+        }), 403
 
     if issuer.certificate_expires_at and issuer.certificate_expires_at < datetime.utcnow():
         vencimento = issuer.certificate_expires_at.strftime("%d/%m/%Y %H:%M")
-        return jsonify({"error": f"Certificate expired on {vencimento}. Please update it to continue."}), 403
+        return jsonify({
+            "error_code": "ISSUER_ERROR_003",
+            "error_message": f"Certificate expired on {vencimento}. Please update it to continue."
+        }), 403
 
     required_map = {
         "issue":   ["action", "receipt_id", "issuer_code", "payer", "amount", "date", "description"],
-        "cancel":  ["action", "receipt_id", "issuer_code", "description"],
-        "consult": ["action", "receipt_id", "issuer_code"]
+        "cancel":  ["action", "receipt_id", "issuer_code", "description"]
     }
 
     required = required_map.get(action)
     if required is None:
         return jsonify({
-            "error": f"Unsupported action '{action}'. Use 'issue', 'cancel' or 'consult'."
+            "error_code": "RECEIPT_ERROR_005",
+            "error_message": f"Unsupported action '{action}'. Use 'issue' or 'cancel'."
         }), 400
 
     missing = [field for field in required if field not in req]
     if missing:
         return jsonify({
-            "error": f"Missing required fields: {', '.join(missing)}"
+            "error_code": "RECEIPT_ERROR_006",
+            "error_message": f"Missing required fields: {', '.join(missing)}"
         }), 400
 
-    # 🔒 Verifica duplicidade com mesmo test
+    if action == "issue" and description is None:
+        return jsonify({
+            "error_code": "RECEIPT_ERROR_007",
+            "error_message": "'description' field must be present (can be empty string)"
+        }), 400
+
+    if reason is not None and action != "cancel":
+        return jsonify({
+            "error_code": "RECEIPT_ERROR_008",
+            "error_message": "Field 'reason' is only allowed when action is 'cancel'"
+        }), 400
+
     existing = Receipt.query.filter_by(
         receipt_id=receipt_id,
         issuer_code=issuer_code,
         test=bool(test_flag)
     ).first()
 
+    if action == "cancel":
+        if not existing:
+            return jsonify({
+                "error_code": "RECEIPT_ERROR_009",
+                "error_message": "Cannot cancel: receipt not found with provided receipt_id and issuer_code."
+            }), 404
+
+        existing.Status = 90
+        existing.reason = reason
+        existing.description = description or ""
+        db.session.commit()
+
+        return jsonify({
+            "data": {
+                "receipt_id": str(receipt_id),
+                "issuer_code": issuer_code,
+                "success": True,
+                "message": "Cancel request registered successfully"
+            }
+        }), 200
+
     if existing:
         return jsonify({
-            "error": f"A receipt with this receipt_id and issuer_code already exists."
+            "error_code": "RECEIPT_ERROR_010",
+            "error_message": "A receipt with this receipt_id and issuer_code already exists."
         }), 409
 
     receipt = Receipt()
@@ -100,17 +158,15 @@ def issue_receipt():
         db.session.commit()
     except ValueError as e:
         db.session.rollback()
-        return jsonify({"error": str(e)}), 400
+        return jsonify({
+            "error_code": "RECEIPT_ERROR_011",
+            "error_message": str(e)
+        }), 400
 
-    receipt_key = "309C63F3-5F7D-4007-BD3B-53E3690E32B6"
-    if action == "issue":
-        message = "Issue request registered successfully"
-    elif action == "cancel":
-        message = "Cancel request registered successfully"
-    elif action == "consult":
-        message = "Consultation completed successfully"
-    else:
-        return jsonify({"error": "Invalid action."}), 400
+    message = {
+        "issue": "Issue request registered successfully",
+        "cancel": "Cancel request registered successfully"
+    }.get(action, "Request completed")
 
     return jsonify({
         "data": {
@@ -125,15 +181,22 @@ def issue_receipt():
 @token_required
 def registrar_endpoint():
     issuer_code = request.issuer_code
+
     if not request.is_json:
-        return jsonify({"error": "O corpo da requisição deve estar em formato JSON."}), 400
+        return jsonify({
+            "error_code": "ENDPOINT_ERROR_001",
+            "error_message": "O corpo da requisição deve estar em formato JSON."
+        }), 400
 
     data = request.get_json()
     url = data.get("url")
     token_endpoint = data.get("token")
 
     if not url or not token_endpoint:
-        return jsonify({"error": "Campos 'url' e 'token' são obrigatórios."}), 400
+        return jsonify({
+            "error_code": "ENDPOINT_ERROR_002",
+            "error_message": "Campos 'url' e 'token' são obrigatórios."
+        }), 400
 
     ip_remoto = request.headers.get('X-Forwarded-For', request.remote_addr)
 
@@ -149,13 +212,16 @@ def registrar_endpoint():
         db.session.commit()
     except Exception as e:
         db.session.rollback()
-        return jsonify({"error": "Erro ao registrar callback.", "detalhes": str(e)}), 500
+        return jsonify({
+            "error_code": "ENDPOINT_ERROR_003",
+            "error_message": "Erro ao registrar callback.",
+            "details": str(e)
+        }), 500
 
     return jsonify({
         "message": "Callback registrado com sucesso.",
         "callback_id": novo_callback.id
     }), 200
-
 
 @api_bp.route('/issuers', methods=['POST'])
 @token_required
@@ -318,6 +384,201 @@ def register_issuer():
         except Exception as e:
             db.session.rollback()
             return jsonify({"error_code": "ISSUERS_ERROR_019", "error_message": "DB error: " + str(e)}), 500
+
+@api_bp.route('/task', methods=['POST'])
+@admin_token_required
+def get_pending_task():
+    try:
+        data = request.get_json(silent=True) or {}
+        preferred_cpf = data.get("preferred")
+
+        receipt = None
+        issuer = None
+
+        if preferred_cpf:
+            issuer = Issuer.query.filter_by(cpf=preferred_cpf).first()
+
+            if issuer:
+                issuer_code_str = str(issuer.issuer_code)
+                receipt = (
+                    Receipt.query
+                    .filter(
+                        Receipt.issuer_code == issuer_code_str,
+                        Receipt.Status.in_(["0", "90"])
+                    )
+                    .order_by(Receipt.received_at.asc())
+                    .first()
+                )
+        else:
+            receipt = (
+                Receipt.query
+                .filter(Receipt.Status.in_(["0", "90"]))
+                .order_by(Receipt.received_at.asc())
+                .first()
+            )
+
+        if not receipt:
+            return jsonify({
+                "error_code": "TASK_ERROR_001",
+                "error_message": "No pending tasks found."
+            }), 204
+
+        if not issuer:
+            issuer = Issuer.query.filter_by(issuer_code=str(receipt.issuer_code)).first()
+
+        decrypted_password = None
+        if issuer and issuer.password:
+            try:
+                decrypted_password = fernet.decrypt(issuer.password.encode()).decode()
+            except Exception:
+                return jsonify({
+                    "error_code": "TASK_ERROR_002",
+                    "error_message": "Failed to decrypt issuer password"
+                }), 500
+
+        result = {
+            "id": receipt.idRS,
+            "issuer_code": receipt.issuer_code,
+            "issuer_cpf": issuer.cpf if issuer else None,
+            "certificate": issuer.certificate if issuer else None,
+            "password": decrypted_password,
+            "receipt_id": receipt.receipt_id,
+            "payer": receipt.payer,
+            "beneficiary": receipt.beneficiary,
+            "amount": str(receipt.amount),
+            "date": receipt.date.isoformat() if receipt.date else None,
+            "description": receipt.description,
+            "test": receipt.test,
+            "status": receipt.Status,
+            "received_at": receipt.received_at.isoformat() if receipt.received_at else None,
+        }
+
+        if receipt.Numero is not None:
+            result["receipt_number"] = receipt.Numero
+
+        if hasattr(receipt, "reason") and receipt.reason is not None:
+            result["reason"] = receipt.reason
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        return jsonify({
+            "error_code": "TASK_ERROR_999",
+            "error_message": "Unexpected error.",
+            "details": str(e)
+        }), 500
+    
+@api_bp.route('/task-return', methods=['POST'])
+@admin_token_required
+def update_task_return():
+    try:
+        data = request.get_json()
+
+        issuer_code = data.get("issuer_code")
+        receipt_id = data.get("receipt_id")
+
+        if issuer_code is None or receipt_id is None:
+            return jsonify({
+                "error_code": "TASK_RETURN_ERROR_001",
+                "error_message": "issuer_code and receipt_id are required."
+            }), 400
+
+        # Busca o receipt com os dados fornecidos
+        receipt = Receipt.query.filter_by(
+            issuer_code=str(issuer_code),
+            receipt_id=receipt_id
+        ).first()
+
+        if not receipt:
+            return jsonify({
+                "error_code": "TASK_RETURN_ERROR_002",
+                "error_message": "No receipt found for given issuer_code and receipt_id."
+            }), 404
+
+        # Campos opcionais a atualizar
+        if "Status" in data:
+            receipt.Status = data["Status"]
+
+        if "DataRs" in data:
+            try:
+                receipt.DataRS = datetime.fromisoformat(data["DataRs"])
+            except Exception:
+                return jsonify({
+                    "error_code": "TASK_RETURN_ERROR_003",
+                    "error_message": "Invalid format for DataRs. Use ISO 8601."
+                }), 400
+
+        if "Chave" in data:
+            receipt.Chave = data["Chave"]
+
+        if "Numero" in data:
+            receipt.Numero = data["Numero"]
+
+        db.session.commit()
+
+        return jsonify({
+            "message": "Receipt updated successfully."
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "error_code": "TASK_RETURN_ERROR_999",
+            "error_message": "Unexpected error.",
+            "details": str(e)
+        }), 500
+    
+@api_bp.route('/query', methods=['POST'])
+@token_required
+def query_receipt_status():
+    try:
+        data = request.get_json()
+        issuer_code = data.get("issuer_code")
+        receipt_id = data.get("receipt_id")
+
+        if not issuer_code or not receipt_id:
+            return jsonify({
+                "error_code": "QUERY_ERROR_001",
+                "error_message": "Both issuer_code and receipt_id are required."
+            }), 400
+
+        receipt = Receipt.query.filter_by(
+            issuer_code=str(issuer_code),
+            receipt_id=receipt_id
+        ).first()
+
+        if not receipt:
+            return jsonify({
+                "error_code": "QUERY_ERROR_002",
+                "error_message": "Receipt not found with provided issuer_code and receipt_id."
+            }), 404
+
+        # Define mapeamento de status → descrição
+        status_map = {
+            "0": "queued",
+            "10": "issued",
+            "90": "cancellation queue",
+            "99": "canceled",
+            0: "queued",
+            10: "issued",
+            90: "cancellation queue",
+            99: "canceled"
+        }
+
+        status_desc = status_map.get(receipt.Status, "unknown status")
+
+        return jsonify({
+            "status_code": receipt.Status,
+            "key": receipt.Chave,
+            "file": "https://example.com/teste.pdf",  # URL temporária
+            "status_description": status_desc
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "error_code": "QUERY_ERROR_999",
+            "error_message": "Unexpected error.",
+            "details": str(e)
+        }), 500
 
 @api_bp.route("/test-db")
 def test_db():

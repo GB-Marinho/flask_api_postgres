@@ -17,6 +17,7 @@ class Receipt(db.Model):
     date = db.Column(db.Date)
     description = db.Column(db.String(255))
     test = db.Column(db.Boolean, default=False)
+    reason = db.Column(db.String(255))
     Status = db.Column(db.SmallInteger, default=0)
     DataRS = db.Column(db.DateTime)
     Retorno = db.Column(db.DateTime)
@@ -34,28 +35,21 @@ class Receipt(db.Model):
         self.payer = str(data_dict.get("payer", ""))
         self.beneficiary = str(data_dict.get("beneficiary", ""))
 
-        # --- Validação e conversão flexível do valor ---
         amount_raw = data_dict.get("amount", "0")
-
         try:
             if isinstance(amount_raw, (int, float, Decimal)):
-                # Ex: 9999.99 → Decimal direto
                 self.amount = Decimal(str(amount_raw))
             else:
                 amount_str = str(amount_raw).strip()
-
-                # Formato BR: 1.234,56 ou 1234,56
                 if re.match(r"^\d{1,3}(\.\d{3})*(,\d{2})?$", amount_str) or re.match(r"^\d+(,\d{2})?$", amount_str):
                     normalized = amount_str.replace(".", "").replace(",", ".")
                     self.amount = Decimal(normalized)
-                # Formato internacional: "1234.56"
                 elif re.match(r"^\d+(\.\d{1,2})?$", amount_str):
                     self.amount = Decimal(amount_str)
                 else:
                     raise ValueError
         except (InvalidOperation, ValueError):
             raise ValueError(f"Valor inválido: {amount_raw}. Use 9999,99 ou 9999.99")
-        # ------------------------------------------------
 
         date_input = data_dict.get("date")
         if date_input:
@@ -65,29 +59,32 @@ class Receipt(db.Model):
                     month = int(date_input.get("month"))
                     day = int(date_input.get("day"))
                     parsed_date = datetime(year, month, day).date()
-
                 elif isinstance(date_input, date):
                     parsed_date = date_input if not isinstance(date_input, datetime) else date_input.date()
-
                 elif isinstance(date_input, str):
                     try:
                         parsed_date = datetime.fromisoformat(date_input).date()
                     except ValueError:
                         parsed_date = datetime.strptime(date_input, "%d/%m/%Y").date()
-
                 else:
                     raise ValueError
 
-                # 🚫 Verificação do período permitido
                 if parsed_date < date(2025, 1, 1) or parsed_date > date.today():
                     raise ValueError("Date is outside the allowed emission period")
 
                 self.date = parsed_date
-
             except Exception as e:
                 raise ValueError(str(e))
 
+        action = data_dict.get("action")
+        if action == "issue" and "description" not in data_dict:
+            raise ValueError("'description' field is required for action 'issue'")
         self.description = data_dict.get("description", "")
+
+        if action == "cancel":
+            self.reason = data_dict.get("reason")
+        else:
+            self.reason = None
 
 # Tabela para armazenar os issuers (clientes) que podem emitir recibos
 class Issuer(db.Model):
@@ -128,3 +125,9 @@ class EndpointUrl(db.Model):
     token = db.Column(db.String(512), nullable=False)
     ip = db.Column(db.String(100), nullable=False)
     data = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class AdminTokenAtual(db.Model):
+    __tablename__ = "admin_token_atuais"
+    
+    admin_id = db.Column(db.String, primary_key=True)
+    jti = db.Column(db.String, nullable=False)
