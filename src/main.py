@@ -23,22 +23,15 @@ def create_app():
     database_url = os.getenv("DATABASE_URL")
     if database_url:
         # Trata URL do Postgres do Fly.io (substitui postgres:// por postgresql:// para SQLAlchemy)
-        ### print("Encontrado DATABASE_URL")  # Linha de depuração
         if database_url.startswith("postgres://"):
             database_url = database_url.replace("postgres://", "postgresql://", 1)
-        # Mantém verificação do MySQL para flexibilidade com MySQL externo
         elif database_url.startswith("mysql://"):
             # Garante uso de PyMySQL se for URL MySQL
             database_url = database_url.replace("mysql://", "mysql+pymysql://", 1)
 
         app.config["SQLALCHEMY_DATABASE_URI"] = database_url
-        ### print(
-        ###     f"Usando banco de dados: "
-        ###     f"{app.config['SQLALCHEMY_DATABASE_URI'].split('@')[1] if '@' in app.config['SQLALCHEMY_DATABASE_URI'] else 'SQLite ou Desconhecido'}"
-        ### )  # Exibe tipo do DB sem credenciais
     else:
         # Alternativa para desenvolvimento local (SQLite)
-        ### print("AVISO: variável DATABASE_URL não definida. Usando SQLite local padrão.")
         instance_path = os.path.join(app.instance_path)
         os.makedirs(instance_path, exist_ok=True)
         app.config["SQLALCHEMY_DATABASE_URI"] = (
@@ -47,17 +40,23 @@ def create_app():
 
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
+    # ✅ Configuração para manter conexões válidas e evitar erros após inatividade
+    app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+        "pool_pre_ping": True,
+        "pool_recycle": 300  # segundos – recicla conexões antigas
+    }
+
     # --- Inicializa Extensões ---
     db.init_app(app)
 
     # --- Importa e Registra Blueprints ---
     from src.routes.api_routes import api_bp
 
-    app.register_blueprint(api_bp, url_prefix="/")
+    app.register_blueprint(api_bp, url_prefix="/receita-saude/v1")
 
     from src.routes.auth_routes import auth_bp
 
-    app.register_blueprint(auth_bp, url_prefix="/auth")
+    app.register_blueprint(auth_bp, url_prefix="/receita-saude/v1/auth")
 
     # --- Importa Models (para que sejam reconhecidos pelo SQLAlchemy antes do create_all) ---
     # Este import é necessário para que o Flask-Migrate ou create_all conheça os models.

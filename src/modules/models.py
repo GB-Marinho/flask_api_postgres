@@ -97,6 +97,8 @@ class Issuer(db.Model):
     password = db.Column(db.String(255), nullable=False)
     active = db.Column(db.Boolean, default=True)
     certificate_expires_at = db.Column(db.DateTime, nullable=True)
+    enable_date = db.Column(db.DateTime, nullable=True)
+    disable_date = db.Column(db.DateTime, nullable=True)
 
 # Log de todas as tentativas de autenticação
 class AuthLog(db.Model):

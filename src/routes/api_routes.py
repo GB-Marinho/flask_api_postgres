@@ -336,6 +336,7 @@ def register_issuer():
                 issuer.password = encrypted_password
                 issuer.certificate_expires_at = not_after
                 issuer.active = True
+                issuer.disable_date = None  # <-- limpa se estava desabilitado
                 message = "Issuer updated and enabled successfully."
             else:
                 new_issuer = Issuer(
@@ -344,7 +345,8 @@ def register_issuer():
                     certificate=fingerprint,
                     password=encrypted_password,
                     certificate_expires_at=not_after,
-                    active=True
+                    active=True,
+                    enable_date=datetime.utcnow()  # <-- define apenas na criação
                 )
                 db.session.add(new_issuer)
                 issuer = new_issuer
@@ -352,6 +354,7 @@ def register_issuer():
 
         elif issuer:
             issuer.active = True
+            issuer.disable_date = None  # <-- limpa disable_date
             message = "Issuer reactivated successfully."
 
         try:
@@ -359,7 +362,8 @@ def register_issuer():
             return jsonify({
                 "data": {
                     "id": issuer.id,
-                    "issuer_code": issuer.issuer_code
+                    "issuer_code": issuer.issuer_code,
+                    "expires_at": issuer.certificate_expires_at.isoformat() if issuer.certificate_expires_at else None
                 },
                 "message": message
             }), 200
@@ -372,12 +376,13 @@ def register_issuer():
             return jsonify({"error_code": "ISSUERS_ERROR_018", "error_message": "Issuer not found for disable"}), 404
 
         issuer.active = False
+        issuer.disable_date = datetime.utcnow()  # <-- registra a desativação
         try:
             db.session.commit()
             return jsonify({
                 "data": {
                     "id": issuer.id,
-                    "issuer_code": issuer.issuer_code
+                    "issuer_code": issuer.issuer_code,
                 },
                 "message": "Issuer disabled successfully."
             }), 200
