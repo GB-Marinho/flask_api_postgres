@@ -9,10 +9,10 @@ class Receipt(db.Model):
 
     idRS = db.Column(db.Integer, primary_key=True, autoincrement=True)
     received_at = db.Column(db.DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
-    issuer_code = db.Column(db.Integer, nullable=False)
+    issuer_code = db.Column(db.String(255), nullable=False)
     receipt_id = db.Column(db.Integer)
-    payer = db.Column(db.String(15), nullable=False)
-    beneficiary = db.Column(db.String(15), nullable=False)
+    payer = db.Column(db.String(11), nullable=False)
+    beneficiary = db.Column(db.String(11), nullable=True)
     amount = db.Column(db.Numeric(10, 2), nullable=False)
     date = db.Column(db.Date)
     description = db.Column(db.String(255))
@@ -22,19 +22,18 @@ class Receipt(db.Model):
     DataRS = db.Column(db.DateTime)
     Retorno = db.Column(db.DateTime)
     Chave = db.Column(db.String(50))
-    Arquivo = db.Column(db.String(255))
-    Excluido = db.Column(db.DateTime)
-    Motivo = db.Column(db.String(255))
     Numero = db.Column(db.String(20))
     Obs = db.Column(db.String(255))
-    Apuracao = db.Column(db.DateTime)
+    callback = db.Column(db.DateTime)
+    callback_cancel = db.Column(db.DateTime)
 
     def load_from_dict(self, data_dict):
-        self.issuer_code = int(data_dict.get("issuer_code")) if data_dict.get("issuer_code") else None
+        self.issuer_code = data_dict.get("issuer_code")
         self.receipt_id = int(data_dict.get("receipt_id", 0))
-        self.payer = str(data_dict.get("payer", ""))
-        self.beneficiary = str(data_dict.get("beneficiary", ""))
+        self.payer = str(data_dict.get("payer", "")).strip()
+        self.beneficiary = str(data_dict.get("beneficiary", "")).strip()
 
+        # --- amount ---
         amount_raw = data_dict.get("amount", "0")
         try:
             if isinstance(amount_raw, (int, float, Decimal)):
@@ -49,8 +48,9 @@ class Receipt(db.Model):
                 else:
                     raise ValueError
         except (InvalidOperation, ValueError):
-            raise ValueError(f"Valor inválido: {amount_raw}. Use 9999,99 ou 9999.99")
+            raise ValueError(f"Invalid amount: {amount_raw}. Use formats like 9999,99 or 9999.99")
 
+        # --- date ---
         date_input = data_dict.get("date")
         if date_input:
             try:
@@ -74,15 +74,20 @@ class Receipt(db.Model):
 
                 self.date = parsed_date
             except Exception as e:
-                raise ValueError(str(e))
+                raise ValueError(f"Invalid date: {e}")
 
+        # --- description ---
         action = data_dict.get("action")
-        if action == "issue" and "description" not in data_dict:
-            raise ValueError("'description' field is required for action 'issue'")
-        self.description = data_dict.get("description", "")
+        if action == "issue":
+            if "description" not in data_dict:
+                raise ValueError("'description' field is required for action 'issue'")
+            self.description = str(data_dict.get("description", "")).strip()
 
+        # --- reason ---
         if action == "cancel":
-            self.reason = data_dict.get("reason")
+            if not data_dict.get("reason"):
+                raise ValueError("Field 'reason' is required when cancelling")
+            self.reason = str(data_dict.get("reason")).strip()
         else:
             self.reason = None
 

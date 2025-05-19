@@ -1,3 +1,4 @@
+import re
 from flask import Blueprint, request, jsonify
 from src.auth.admin_jwt_auth import admin_token_required
 from src.extensions import db # Import db from extensions
@@ -24,6 +25,18 @@ api_bp = Blueprint(
     'api_bp', __name__
 )
 
+def is_valid_cpf(cpf: str) -> bool:
+    cpf = re.sub(r"\D", "", cpf)
+    if not cpf or len(cpf) != 11 or cpf == cpf[0] * 11:
+        return False
+
+    for i in [9, 10]:
+        value = sum((int(cpf[num]) * ((i + 1) - num) for num in range(i)))
+        digit = ((value * 10) % 11) % 10
+        if digit != int(cpf[i]):
+            return False
+    return True
+
 @api_bp.route('/receipts', methods=['POST'])
 @token_required
 def issue_receipt():
@@ -45,14 +58,21 @@ def issue_receipt():
         }), 400
 
     action      = req.get("action")
-    receipt_id  = req.get("receipt_id")
     issuer_code = req.get("issuer_code")
+    receipt_id  = req.get("receipt_id")
     payer       = req.get("payer")
+    beneficiary = req.get("beneficiary")
     amount      = req.get("amount")
     date        = req.get("date")
     description = req.get("description")
     reason      = req.get("reason")
     test_flag   = req.get("test", False)
+
+    if not isinstance(test_flag, bool):
+        return jsonify({
+            "error_code": "RECEIPT_ERROR_021",
+            "error_message": "Field 'test' must be boolean (true or false)"
+        }), 400
 
     if not action:
         return jsonify({
@@ -86,9 +106,10 @@ def issue_receipt():
             "error_message": f"Certificate expired on {vencimento}. Please update it to continue."
         }), 403
 
+    # Campos obrigatórios por ação
     required_map = {
-        "issue":   ["action", "receipt_id", "issuer_code", "payer", "amount", "date", "description"],
-        "cancel":  ["action", "receipt_id", "issuer_code", "description"]
+        "issue":   ["action", "receipt_id", "payer", "amount", "date", "description"],
+        "cancel":  ["action", "receipt_id", "reason"]
     }
 
     required = required_map.get(action)
@@ -98,17 +119,18 @@ def issue_receipt():
             "error_message": f"Unsupported action '{action}'. Use 'issue' or 'cancel'."
         }), 400
 
-    missing = [field for field in required if field not in req]
+    # ✅ Permite description vazio, mas exige presença
+    missing = []
+    for field in required:
+        if field not in req:
+            missing.append(field)
+        elif field != "description" and not req.get(field) and req.get(field) != 0:
+            missing.append(field)
+
     if missing:
         return jsonify({
             "error_code": "RECEIPT_ERROR_006",
             "error_message": f"Missing required fields: {', '.join(missing)}"
-        }), 400
-
-    if action == "issue" and description is None:
-        return jsonify({
-            "error_code": "RECEIPT_ERROR_007",
-            "error_message": "'description' field must be present (can be empty string)"
         }), 400
 
     if reason is not None and action != "cancel":
@@ -117,10 +139,70 @@ def issue_receipt():
             "error_message": "Field 'reason' is only allowed when action is 'cancel'"
         }), 400
 
+    # ⚠️ Validações específicas para ação "issue"
+    if action == "issue":
+        if not payer:
+            return jsonify({
+                "error_code": "RECEIPT_ERROR_012",
+                "error_message": "Field 'payer' is required."
+            }), 400
+
+        if not is_valid_cpf(payer):
+            return jsonify({
+                "error_code": "RECEIPT_ERROR_013",
+                "error_message": f"Invalid CPF for payer: {payer}"
+            }), 400
+
+        if payer == issuer.cpf:
+            return jsonify({
+                "error_code": "RECEIPT_ERROR_014",
+                "error_message": "Payer CPF cannot be the same as the issuer CPF."
+            }), 400
+
+        if beneficiary:
+            if not is_valid_cpf(beneficiary):
+                return jsonify({
+                    "error_code": "RECEIPT_ERROR_015",
+                    "error_message": f"Invalid CPF for beneficiary: {beneficiary}"
+                }), 400
+
+        if not isinstance(amount, (int, float)):
+            return jsonify({
+                "error_code": "RECEIPT_ERROR_016",
+                "error_message": "Amount must be a number (not string)."
+            }), 400
+
+        if amount > 99999999.99:
+            return jsonify({
+                "error_code": "RECEIPT_ERROR_017",
+                "error_message": "Amount exceeds maximum allowed value of 99,999,999.99"
+            }), 400
+
+        if date in (None, ""):
+            return jsonify({
+                "error_code": "RECEIPT_ERROR_018",
+                "error_message": "Field 'date' cannot be null or empty."
+            }), 400
+
+        try:
+            parsed_date = datetime.fromisoformat(date)
+        except ValueError:
+            return jsonify({
+                "error_code": "RECEIPT_ERROR_019",
+                "error_message": "Field 'date' must be a valid ISO 8601 datetime string."
+            }), 400
+
+        if parsed_date > datetime.utcnow():
+            return jsonify({
+                "error_code": "RECEIPT_ERROR_020",
+                "error_message": "Field 'date' cannot be a future date."
+            }), 400
+
+    # Verifica se já existe
     existing = Receipt.query.filter_by(
         receipt_id=receipt_id,
         issuer_code=issuer_code,
-        test=bool(test_flag)
+        test=test_flag
     ).first()
 
     if action == "cancel":
@@ -130,9 +212,20 @@ def issue_receipt():
                 "error_message": "Cannot cancel: receipt not found with provided receipt_id and issuer_code."
             }), 404
 
+        if existing.Status in (90, 99):
+            return jsonify({
+                "error_code": "RECEIPT_ERROR_010",
+                "error_message": f"Receipt already cancelled or cancellation in progress (status {existing.Status})."
+            }), 400
+
+        if not reason:
+            return jsonify({
+                "error_code": "RECEIPT_ERROR_011",
+                "error_message": "Field 'reason' is required when cancelling a receipt."
+            }), 400
+
         existing.Status = 90
         existing.reason = reason
-        existing.description = description or ""
         db.session.commit()
 
         return jsonify({
@@ -146,34 +239,30 @@ def issue_receipt():
 
     if existing:
         return jsonify({
-            "error_code": "RECEIPT_ERROR_010",
+            "error_code": "RECEIPT_ERROR_012",
             "error_message": "A receipt with this receipt_id and issuer_code already exists."
         }), 409
 
+    # Novo registro
     receipt = Receipt()
     try:
         receipt.load_from_dict(req)
-        receipt.test = bool(test_flag)
+        receipt.test = test_flag
         db.session.add(receipt)
         db.session.commit()
     except ValueError as e:
         db.session.rollback()
         return jsonify({
-            "error_code": "RECEIPT_ERROR_011",
+            "error_code": "RECEIPT_ERROR_013",
             "error_message": str(e)
         }), 400
 
-    message = {
-        "issue": "Issue request registered successfully",
-        "cancel": "Cancel request registered successfully"
-    }.get(action, "Request completed")
-
     return jsonify({
         "data": {
-            "receipt_id": str(req["receipt_id"]),
+            "receipt_id": str(receipt_id),
             "issuer_code": issuer_code,
             "success": True,
-            "message": message,
+            "message": "Issue request registered successfully"
         }
     }), 200
 
@@ -226,10 +315,6 @@ def registrar_endpoint():
 @api_bp.route('/issuers', methods=['POST'])
 @token_required
 def register_issuer():
-    """
-    Ativa (cria ou atualiza) ou desativa um issuer com base no campo 'action'.
-    A senha do certificado é criptografada com Fernet e validada.
-    """
     issuer_code = request.issuer_code
 
     issuer_data = {}
@@ -270,6 +355,9 @@ def register_issuer():
         if not issuer and not issuer_data.get("password"):
             return jsonify({"error_code": "ISSUERS_ERROR_007", "error_message": "Missing field: password"}), 400
 
+        cpf_enviado = issuer_data.get("cpf")
+        cpf_do_certificado = None
+
         if file:
             pfx_bytes = file.read()
             try:
@@ -289,6 +377,21 @@ def register_issuer():
                     return jsonify({"error_code": "ISSUERS_ERROR_010", "error_message": f"Certificate expired on: {not_after}"}), 400
 
                 fingerprint = cert.fingerprint(hashes.SHA256()).hex().upper()
+
+                # 🆕 Extrai o CPF do certificado e compara
+                subject = cert.subject.rfc4514_string()
+                match = re.search(r":(\d{11})", subject)
+                cpf_do_certificado = match.group(1) if match else None
+
+                if not cpf_do_certificado:
+                    return jsonify({"error_code": "ISSUERS_ERROR_020", "error_message": "CPF not found in certificate."}), 400
+                if not cpf_enviado:
+                    return jsonify({"error_code": "ISSUERS_ERROR_021", "error_message": "Missing field: cpf"}), 400
+                if cpf_enviado != cpf_do_certificado:
+                    return jsonify({
+                        "error_code": "ISSUERS_ERROR_022",
+                        "error_message": f"CPF in certificate ({cpf_do_certificado}) does not match the CPF provided ({cpf_enviado})."
+                    }), 400
 
             except ValueError as e:
                 return jsonify({"error_code": "ISSUERS_ERROR_011", "error_message": f"Error processing certificate: {e}"}), 400
@@ -336,25 +439,32 @@ def register_issuer():
                 issuer.password = encrypted_password
                 issuer.certificate_expires_at = not_after
                 issuer.active = True
-                issuer.disable_date = None  # <-- limpa se estava desabilitado
+                issuer.disable_date = None
                 message = "Issuer updated and enabled successfully."
             else:
                 new_issuer = Issuer(
                     issuer_code=issuer_code_in_req,
-                    cpf=issuer_data["cpf"],
+                    cpf=cpf_enviado,
                     certificate=fingerprint,
                     password=encrypted_password,
                     certificate_expires_at=not_after,
                     active=True,
-                    enable_date=datetime.utcnow()  # <-- define apenas na criação
+                    enable_date=datetime.utcnow()
                 )
                 db.session.add(new_issuer)
                 issuer = new_issuer
                 message = "Issuer created and enabled successfully."
 
-        elif issuer:
+        else:
+            # Sem certificado, mas CPF foi enviado: comparar com o CPF no banco
+            if cpf_enviado and issuer and issuer.cpf != cpf_enviado:
+                return jsonify({
+                    "error_code": "ISSUERS_ERROR_023",
+                    "error_message": f"Provided CPF ({cpf_enviado}) does not match the issuer record ({issuer.cpf})."
+                }), 400
+
             issuer.active = True
-            issuer.disable_date = None  # <-- limpa disable_date
+            issuer.disable_date = None
             message = "Issuer reactivated successfully."
 
         try:
@@ -376,7 +486,7 @@ def register_issuer():
             return jsonify({"error_code": "ISSUERS_ERROR_018", "error_message": "Issuer not found for disable"}), 404
 
         issuer.active = False
-        issuer.disable_date = datetime.utcnow()  # <-- registra a desativação
+        issuer.disable_date = datetime.utcnow()
         try:
             db.session.commit()
             return jsonify({
@@ -453,6 +563,7 @@ def get_pending_task():
             "amount": str(receipt.amount),
             "date": receipt.date.isoformat() if receipt.date else None,
             "description": receipt.description,
+            "reason": receipt.reason,
             "test": receipt.test,
             "status": receipt.Status,
             "received_at": receipt.received_at.isoformat() if receipt.received_at else None,
@@ -500,10 +611,10 @@ def update_task_return():
                 "error_message": "No receipt found for given issuer_code and receipt_id."
             }), 404
 
-        # Campos opcionais a atualizar
-        if "status" in data:
-            receipt.Status = data["status"]
+        # Verifica se o status atual é 90
+        status_is_90 = str(receipt.Status) == "90"
 
+        # Atualiza os campos permitidos
         if "process_date" in data:
             try:
                 receipt.DataRS = datetime.fromisoformat(data["process_date"])
@@ -518,6 +629,21 @@ def update_task_return():
 
         if "receipt_number" in data:
             receipt.Numero = data["receipt_number"]
+
+        # Atualiza o status com regras específicas
+        if "status" in data:
+            new_status = str(data["status"])
+
+            if status_is_90:
+                if new_status == "99":
+                    receipt.Status = new_status
+                else:
+                    return jsonify({
+                        "error_code": "TASK_RETURN_ERROR_004",
+                        "error_message": "Status can only be updated from 90 to 99."
+                    }), 400
+            else:
+                receipt.Status = new_status
 
         db.session.commit()
 
@@ -582,6 +708,188 @@ def query_receipt_status():
         return jsonify({
             "error_code": "QUERY_ERROR_999",
             "error_message": "Unexpected error.",
+            "details": str(e)
+        }), 500
+        
+@api_bp.route('/test-callback', methods=['POST'])
+@admin_token_required
+def receber_callback_teste():
+    """
+    Endpoint para simular o servidor do cliente que recebe o callback.
+    Além de logar os dados recebidos, valida se o issuer_code e o receipt_id existem no banco.
+    """
+    try:
+        data = request.get_json()
+        callback_data = data.get("data", {})
+
+        receipt_id = callback_data.get("receipt_id")
+        issuer_code = callback_data.get("issuer_code")
+
+        if receipt_id is None or issuer_code is None:
+            return jsonify({
+                "error_code": "CALLBACK_RECEIVE_ERROR_001",
+                "error_message": "receipt_id and issuer_code are required in 'data'."
+            }), 400
+
+        # Verifica se existe o recibo com os dados fornecidos
+        receipt = Receipt.query.filter_by(
+            issuer_code=str(issuer_code),
+            receipt_id=receipt_id
+        ).first()
+
+        if not receipt:
+            return jsonify({
+                "error_code": "CALLBACK_RECEIVE_ERROR_002",
+                "error_message": "Receipt not found for the given issuer_code and receipt_id."
+            }), 404
+
+        print("📥 Callback recebido no /teste-callback:")
+        print(callback_data)
+
+        return jsonify({
+            "message": "Callback recebido com sucesso e validado.",
+            "received_data": callback_data
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "error_code": "CALLBACK_RECEIVE_ERROR_999",
+            "error_message": "Erro inesperado ao processar callback.",
+            "details": str(e)
+        }), 500
+        
+@api_bp.route('/callback', methods=['GET'])
+@admin_token_required
+def listar_receipts_para_callback():
+    """
+    Lista até 100 receipts pendentes de callback, seja por emissão (status 10, callback null)
+    ou por cancelamento (status 99, callback_cancel null).
+    Retorna issuer.cpf + dados principais do recibo.
+    """
+    try:
+        # Junta as duas condições com OR
+        receipts = (
+            db.session.query(Receipt, Issuer)
+            .join(Issuer, Receipt.issuer_code == Issuer.issuer_code)
+            .filter(
+                db.or_(
+                    db.and_(Receipt.Status == 10, Receipt.callback == None),
+                    db.and_(Receipt.Status == 99, Receipt.callback_cancel == None)
+                )
+            )
+            .limit(100)
+            .all()
+        )
+
+        resultados = []
+        for receipt, issuer in receipts:
+            resultados.append({
+                "issuer_cpf": issuer.cpf,
+                "receipt": {
+                    "issuer_code": receipt.issuer_code,
+                    "receipt_id": receipt.receipt_id,
+                    "date": receipt.date.isoformat() if receipt.date else None,
+                    "test": receipt.test,
+                    "status": receipt.Status,
+                    "key": receipt.Chave,
+                    "receipt_number": receipt.Numero
+                }
+            })
+
+        return jsonify(resultados), 200
+
+    except Exception as e:
+        return jsonify({
+            "error_code": "CALLBACK_LIST_ERROR",
+            "error_message": "Erro ao buscar receipts para callback.",
+            "details": str(e)
+        }), 500
+        
+@api_bp.route('/callback-return', methods=['POST'])
+@admin_token_required
+def registrar_callback_recebido():
+    """
+    Recebe confirmação de que o callback foi enviado com sucesso.
+    Atualiza a coluna 'callback' se status 10, ou 'callback_cancel' se status 99.
+    Faz validações:
+    - status deve ser igual ao registrado no banco
+    - callback/callback_cancel não pode já estar preenchido
+    """
+    try:
+        data = request.get_json()
+
+        issuer_code = data.get("issuer_code")
+        receipt_id = data.get("receipt_id")
+        status = data.get("status")
+        date_str = data.get("date")
+
+        if None in [issuer_code, receipt_id, status, date_str]:
+            return jsonify({
+                "error_code": "CALLBACK_RETURN_ERROR_001",
+                "error_message": "issuer_code, receipt_id, status, and date are required."
+            }), 400
+
+        # Converte a data recebida
+        try:
+            callback_date = datetime.fromisoformat(date_str)
+        except Exception:
+            return jsonify({
+                "error_code": "CALLBACK_RETURN_ERROR_002",
+                "error_message": "Invalid date format. Use ISO 8601."
+            }), 400
+
+        # Busca o recibo
+        receipt = Receipt.query.filter_by(
+            issuer_code=str(issuer_code),
+            receipt_id=receipt_id
+        ).first()
+
+        if not receipt:
+            return jsonify({
+                "error_code": "CALLBACK_RETURN_ERROR_003",
+                "error_message": "No receipt found with given issuer_code and receipt_id."
+            }), 404
+
+        # Verifica se o status do banco é o mesmo do informado
+        if str(receipt.Status) != str(status):
+            return jsonify({
+                "error_code": "CALLBACK_RETURN_ERROR_004",
+                "error_message": f"Status mismatch. Received: {status}, expected: {receipt.Status}."
+            }), 400
+
+        # Verifica e atualiza de acordo com o status
+        if str(status) == "10":
+            if receipt.callback is not None:
+                return jsonify({
+                    "error_code": "CALLBACK_RETURN_ERROR_005",
+                    "error_message": "Callback already registered for status 10."
+                }), 400
+            receipt.callback = callback_date
+
+        elif str(status) == "99":
+            if receipt.callback_cancel is not None:
+                return jsonify({
+                    "error_code": "CALLBACK_RETURN_ERROR_006",
+                    "error_message": "Callback already registered for status 99."
+                }), 400
+            receipt.callback_cancel = callback_date
+
+        else:
+            return jsonify({
+                "error_code": "CALLBACK_RETURN_ERROR_007",
+                "error_message": "Unsupported status. Only 10 or 99 are allowed."
+            }), 400
+
+        db.session.commit()
+
+        return jsonify({
+            "message": "Callback registrado com sucesso."
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "error_code": "CALLBACK_RETURN_ERROR_999",
+            "error_message": "Erro inesperado ao processar callback return.",
             "details": str(e)
         }), 500
  

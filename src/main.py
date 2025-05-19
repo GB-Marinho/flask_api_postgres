@@ -73,6 +73,7 @@ def create_app():
     # --- Criação de tabelas no contexto da aplicação ---
     # Isso criará as tabelas com base nos models para o DB configurado (SQLite, Postgres, MySQL)
     
+    
     with app.app_context():
         ### print("Garantindo existência das tabelas no banco...")
         db.create_all()
